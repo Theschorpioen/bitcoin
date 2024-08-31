@@ -2,10 +2,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <stdint.h>
-#include <string>
-#include <vector>
-
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <boost/test/unit_test.hpp>
@@ -21,6 +17,11 @@
 #include <script/miniscript.h>
 #include <script/script_error.h>
 #include <script/signingprovider.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -274,7 +275,7 @@ public:
         XOnlyPubKey pk{pubkey};
         auto it = g_testdata->schnorr_signatures.find(pk);
         if (it == g_testdata->schnorr_signatures.end()) return false;
-        return sig == it->second;
+        return std::ranges::equal(sig, it->second);
     }
 
     bool CheckLockTime(const CScriptNum& locktime) const override {
@@ -340,13 +341,14 @@ void SatisfactionToWitness(miniscript::MiniscriptContext ctx, CScriptWitness& wi
     witness.stack.push_back(*builder.GetSpendData().scripts.begin()->second.begin());
 }
 
+struct MiniScriptTest : BasicTestingSetup {
 /** Run random satisfaction tests. */
 void TestSatisfy(const KeyConverter& converter, const std::string& testcase, const NodeRef& node) {
     auto script = node->ToScript(converter);
     auto challenges = FindChallenges(node); // Find all challenges in the generated miniscript.
     std::vector<Challenge> challist(challenges.begin(), challenges.end());
     for (int iter = 0; iter < 3; ++iter) {
-        std::shuffle(challist.begin(), challist.end(), g_insecure_rand_ctx);
+        std::shuffle(challist.begin(), challist.end(), m_rng);
         Satisfier satisfier(converter.MsContext());
         TestSignatureChecker checker(satisfier);
         bool prev_mal_success = false, prev_nonmal_success = false;
@@ -488,10 +490,11 @@ void Test(const std::string& ms, const std::string& hexscript, const std::string
          /*opslimit=*/-1, /*stacklimit=*/-1,
          /*max_wit_size=*/std::nullopt, /*max_tap_wit_size=*/std::nullopt, /*stack_exec=*/std::nullopt);
 }
+}; // struct MiniScriptTest
 
 } // namespace
 
-BOOST_FIXTURE_TEST_SUITE(miniscript_tests, BasicTestingSetup)
+BOOST_FIXTURE_TEST_SUITE(miniscript_tests, MiniScriptTest)
 
 BOOST_AUTO_TEST_CASE(fixed_tests)
 {
@@ -698,6 +701,12 @@ BOOST_AUTO_TEST_CASE(fixed_tests)
     BOOST_CHECK(ms_ins && ms_ins->IsValid() && !ms_ins->IsSane());
     const auto insane_sub = ms_ins->FindInsaneSub();
     BOOST_CHECK(insane_sub && *insane_sub->ToString(wsh_converter) == "and_b(after(1),a:after(1000000000))");
+
+    // Numbers can't be prefixed by a sign.
+    BOOST_CHECK(!miniscript::FromString("after(-1)", wsh_converter));
+    BOOST_CHECK(!miniscript::FromString("after(+1)", wsh_converter));
+    BOOST_CHECK(!miniscript::FromString("thresh(-1,pk(03cdabb7f2dce7bfbd8a0b9570c6fd1e712e5d64045e9d6b517b3d5072251dc204))", wsh_converter));
+    BOOST_CHECK(!miniscript::FromString("multi(+1,03cdabb7f2dce7bfbd8a0b9570c6fd1e712e5d64045e9d6b517b3d5072251dc204)", wsh_converter));
 
     // Timelock tests
     Test("after(100)", "?", "?", TESTMODE_VALID | TESTMODE_NONMAL); // only heightlock

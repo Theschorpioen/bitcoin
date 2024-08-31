@@ -12,11 +12,10 @@ pushd "/"
 
 ${CI_RETRY_EXE} apt-get update
 # Lint dependencies:
-# - automake pkg-config libtool (for lint_includes_build_config)
 # - curl/xz-utils (to install shellcheck)
 # - git (used in many lint scripts)
 # - gpg (used by verify-commits)
-${CI_RETRY_EXE} apt-get install -y automake pkg-config libtool curl xz-utils git gpg
+${CI_RETRY_EXE} apt-get install -y curl xz-utils git gpg
 
 PYTHON_PATH="/python_build"
 if [ ! -d "${PYTHON_PATH}/bin" ]; then
@@ -53,6 +52,7 @@ ${CI_RETRY_EXE} pip3 install \
   lief==0.13.2 \
   mypy==1.4.1 \
   pyzmq==25.1.0 \
+  ruff==0.5.5 \
   vulture==2.6
 
 SHELLCHECK_VERSION=v0.8.0

@@ -8,6 +8,7 @@
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <chainparamsbase.h>
 #include <clientversion.h>
 #include <coins.h>
 #include <common/args.h>
@@ -1273,7 +1274,7 @@ RPCHelpMan getblockchaininfo()
         RPCResult{
             RPCResult::Type::OBJ, "", "",
             {
-                {RPCResult::Type::STR, "chain", "current network name (main, test, signet, regtest)"},
+                {RPCResult::Type::STR, "chain", "current network name (" LIST_CHAIN_NAMES ")"},
                 {RPCResult::Type::NUM, "blocks", "the height of the most-work fully-validated chain. The genesis block has height 0"},
                 {RPCResult::Type::NUM, "headers", "the current number of headers we have validated"},
                 {RPCResult::Type::STR, "bestblockhash", "the hash of the currently best block"},
@@ -2160,14 +2161,14 @@ static const auto scan_result_status_some = RPCResult{
 
 static RPCHelpMan scantxoutset()
 {
-    // scriptPubKey corresponding to mainnet address 12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S
+    // raw() descriptor corresponding to mainnet address 12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S
     const std::string EXAMPLE_DESCRIPTOR_RAW = "raw(76a91411b366edfc0a8b66feebae5c2e25a7b6a5d1cf3188ac)#fm24fxxy";
 
     return RPCHelpMan{"scantxoutset",
         "\nScans the unspent transaction output set for entries that match certain output descriptors.\n"
         "Examples of output descriptors are:\n"
-        "    addr(<address>)                      Outputs whose scriptPubKey corresponds to the specified address (does not include P2PK)\n"
-        "    raw(<hex script>)                    Outputs whose scriptPubKey equals the specified hex scripts\n"
+        "    addr(<address>)                      Outputs whose output script corresponds to the specified address (does not include P2PK)\n"
+        "    raw(<hex script>)                    Outputs whose output script equals the specified hex-encoded bytes\n"
         "    combo(<pubkey>)                      P2PK, P2PKH, P2WPKH, and P2SH-P2WPKH outputs for the given pubkey\n"
         "    pkh(<pubkey>)                        P2PKH outputs for the given pubkey\n"
         "    sh(multi(<n>,<pubkey>,<pubkey>,...)) P2SH-multisig outputs for the given threshold and pubkeys\n"
@@ -2196,8 +2197,8 @@ static RPCHelpMan scantxoutset()
                     {
                         {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
                         {RPCResult::Type::NUM, "vout", "The vout value"},
-                        {RPCResult::Type::STR_HEX, "scriptPubKey", "The script key"},
-                        {RPCResult::Type::STR, "desc", "A specialized descriptor for the matched scriptPubKey"},
+                        {RPCResult::Type::STR_HEX, "scriptPubKey", "The output script"},
+                        {RPCResult::Type::STR, "desc", "A specialized descriptor for the matched output script"},
                         {RPCResult::Type::STR_AMOUNT, "amount", "The total amount in " + CURRENCY_UNIT + " of the unspent output"},
                         {RPCResult::Type::BOOL, "coinbase", "Whether this is a coinbase output"},
                         {RPCResult::Type::NUM, "height", "Height of the unspent transaction output"},
@@ -2741,7 +2742,7 @@ UniValue CreateUTXOSnapshot(
         tip->nHeight, tip->GetBlockHash().ToString(),
         fs::PathToString(path), fs::PathToString(temppath)));
 
-    SnapshotMetadata metadata{chainstate.m_chainman.GetParams().MessageStart(), tip->GetBlockHash(), tip->nHeight, maybe_stats->coins_count};
+    SnapshotMetadata metadata{chainstate.m_chainman.GetParams().MessageStart(), tip->GetBlockHash(), maybe_stats->coins_count};
 
     afile << metadata;
 
@@ -2865,10 +2866,12 @@ static RPCHelpMan loadtxoutset()
         throw JSONRPCError(RPC_INTERNAL_ERROR, strprintf("Unable to load UTXO snapshot: %s. (%s)", util::ErrorString(activation_result).original, path.utf8string()));
     }
 
+    CBlockIndex& snapshot_index{*CHECK_NONFATAL(*activation_result)};
+
     UniValue result(UniValue::VOBJ);
     result.pushKV("coins_loaded", metadata.m_coins_count);
-    result.pushKV("tip_hash", metadata.m_base_blockhash.ToString());
-    result.pushKV("base_height", metadata.m_base_blockheight);
+    result.pushKV("tip_hash", snapshot_index.GetBlockHash().ToString());
+    result.pushKV("base_height", snapshot_index.nHeight);
     result.pushKV("path", fs::PathToString(path));
     return result;
 },

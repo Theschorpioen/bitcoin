@@ -311,6 +311,13 @@ def sha256sum_file(filename):
     return h.digest()
 
 
+def util_xor(data, key, *, offset):
+    data = bytearray(data)
+    for i in range(len(data)):
+        data[i] ^= key[(i + offset) % len(key)]
+    return bytes(data)
+
+
 # RPC/P2P connection constants and functions
 ############################################
 

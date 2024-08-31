@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2022 The Bitcoin Core developers
+// Copyright (c) 2011-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -31,7 +31,6 @@
 #include <node/warnings.h>
 #include <noui.h>
 #include <policy/fees.h>
-#include <policy/fees_args.h>
 #include <pow.h>
 #include <random.h>
 #include <rpc/blockchain.h>
@@ -76,8 +75,8 @@ using node::VerifyLoadedChainstate;
 
 const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 
-/** Random context to get unique temp data dirs. Separate from g_insecure_rand_ctx, which can be seeded from a const env var */
-static FastRandomContext g_insecure_rand_ctx_temp_path;
+/** Random context to get unique temp data dirs. Separate from m_rng, which can be seeded from a const env var */
+static FastRandomContext g_rng_temp_path;
 
 std::ostream& operator<<(std::ostream& os, const arith_uint256& num)
 {
@@ -159,7 +158,7 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
 
     if (!m_node.args->IsArgSet("-testdatadir")) {
         // By default, the data directory has a random name
-        const auto rand_str{g_insecure_rand_ctx_temp_path.rand256().ToString()};
+        const auto rand_str{g_rng_temp_path.rand256().ToString()};
         m_path_root = fs::temp_directory_path() / "test_common_" PACKAGE_NAME / rand_str;
         TryCreateDirectories(m_path_root);
     } else {
@@ -236,7 +235,6 @@ ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
         m_node.validation_signals = std::make_unique<ValidationSignals>(std::make_unique<SerialTaskRunner>(*m_node.scheduler));
     }
 
-    m_node.fee_estimator = std::make_unique<CBlockPolicyEstimator>(FeeestPath(*m_node.args), DEFAULT_ACCEPT_STALE_FEE_ESTIMATES);
     bilingual_str error{};
     m_node.mempool = std::make_unique<CTxMemPool>(MemPoolOptionsForTest(m_node), error);
     Assert(error.empty());
@@ -246,24 +244,34 @@ ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
 
     m_node.notifications = std::make_unique<KernelNotifications>(*Assert(m_node.shutdown), m_node.exit_status, *Assert(m_node.warnings));
 
-    const ChainstateManager::Options chainman_opts{
-        .chainparams = chainparams,
-        .datadir = m_args.GetDataDirNet(),
-        .check_block_index = 1,
-        .notifications = *m_node.notifications,
-        .signals = m_node.validation_signals.get(),
-        .worker_threads_num = 2,
+    m_make_chainman = [this, &chainparams, opts] {
+        Assert(!m_node.chainman);
+        ChainstateManager::Options chainman_opts{
+            .chainparams = chainparams,
+            .datadir = m_args.GetDataDirNet(),
+            .check_block_index = 1,
+            .notifications = *m_node.notifications,
+            .signals = m_node.validation_signals.get(),
+            .worker_threads_num = 2,
+        };
+        if (opts.min_validation_cache) {
+            chainman_opts.script_execution_cache_bytes = 0;
+            chainman_opts.signature_cache_bytes = 0;
+        }
+        const BlockManager::Options blockman_opts{
+            .chainparams = chainman_opts.chainparams,
+            .blocks_dir = m_args.GetBlocksDirPath(),
+            .notifications = chainman_opts.notifications,
+        };
+        m_node.chainman = std::make_unique<ChainstateManager>(*Assert(m_node.shutdown), chainman_opts, blockman_opts);
+        LOCK(m_node.chainman->GetMutex());
+        m_node.chainman->m_blockman.m_block_tree_db = std::make_unique<BlockTreeDB>(DBParams{
+            .path = m_args.GetDataDirNet() / "blocks" / "index",
+            .cache_bytes = static_cast<size_t>(m_cache_sizes.block_tree_db),
+            .memory_only = true,
+        });
     };
-    const BlockManager::Options blockman_opts{
-        .chainparams = chainman_opts.chainparams,
-        .blocks_dir = m_args.GetBlocksDirPath(),
-        .notifications = chainman_opts.notifications,
-    };
-    m_node.chainman = std::make_unique<ChainstateManager>(*Assert(m_node.shutdown), chainman_opts, blockman_opts);
-    m_node.chainman->m_blockman.m_block_tree_db = std::make_unique<BlockTreeDB>(DBParams{
-        .path = m_args.GetDataDirNet() / "blocks" / "index",
-        .cache_bytes = static_cast<size_t>(m_cache_sizes.block_tree_db),
-        .memory_only = true});
+    m_make_chainman();
 }
 
 ChainTestingSetup::~ChainTestingSetup()
@@ -276,7 +284,7 @@ ChainTestingSetup::~ChainTestingSetup()
     m_node.netgroupman.reset();
     m_node.args = nullptr;
     m_node.mempool.reset();
-    m_node.fee_estimator.reset();
+    Assert(!m_node.fee_estimator); // Each test must create a local object, if they wish to use the fee_estimator
     m_node.chainman.reset();
     m_node.validation_signals.reset();
     m_node.scheduler.reset();
@@ -572,7 +580,7 @@ void TestChain100Setup::MockMempoolMinFee(const CFeeRate& target_feerate)
     // Manually create an invalid transaction. Manually set the fee in the CTxMemPoolEntry to
     // achieve the exact target feerate.
     CMutableTransaction mtx = CMutableTransaction();
-    mtx.vin.emplace_back(COutPoint{Txid::FromUint256(g_insecure_rand_ctx.rand256()), 0});
+    mtx.vin.emplace_back(COutPoint{Txid::FromUint256(m_rng.rand256()), 0});
     mtx.vout.emplace_back(1 * COIN, GetScriptForDestination(WitnessV0ScriptHash(CScript() << OP_TRUE)));
     const auto tx{MakeTransactionRef(mtx)};
     LockPoints lp;

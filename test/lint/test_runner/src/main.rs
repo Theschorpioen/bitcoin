@@ -36,6 +36,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             lint_fn: lint_markdown
         },
         &Linter {
+            description: "Check the default arguments in python",
+            name: "py_mut_arg_default",
+            lint_fn: lint_py_mut_arg_default,
+        },
+        &Linter {
             description: "Check that std::filesystem is not used directly",
             name: "std_filesystem",
             lint_fn: lint_std_filesystem
@@ -180,6 +185,35 @@ fn lint_subtree() -> LintResult {
     }
 }
 
+fn lint_py_mut_arg_default() -> LintResult {
+    let bin_name = "ruff";
+    let checks = ["B006", "B008"]
+        .iter()
+        .map(|c| format!("--select={}", c))
+        .collect::<Vec<_>>();
+    let files = check_output(
+        git()
+            .args(["ls-files", "--", "*.py"])
+            .args(get_pathspecs_exclude_subtrees()),
+    )?;
+
+    let mut cmd = Command::new(bin_name);
+    cmd.arg("check").args(checks).args(files.lines());
+
+    match cmd.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err(format!("`{}` found errors!", bin_name)),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            println!(
+                "`{}` was not found in $PATH, skipping those checks.",
+                bin_name
+            );
+            Ok(())
+        }
+        Err(e) => Err(format!("Error running `{}`: {}", bin_name, e)),
+    }
+}
+
 fn lint_std_filesystem() -> LintResult {
     let found = git()
         .args([
@@ -284,20 +318,14 @@ Please add any false positives, such as subtrees, or externally sourced files to
 }
 
 fn lint_includes_build_config() -> LintResult {
-    let config_path = "./src/config/bitcoin-config.h.in";
-    if !Path::new(config_path).is_file() {
-        assert!(Command::new("./autogen.sh")
-            .status()
-            .expect("command error")
-            .success());
-    }
+    let config_path = "./cmake/bitcoin-config.h.in";
     let defines_regex = format!(
         r"^\s*(?!//).*({})",
-        check_output(Command::new("grep").args(["undef ", "--", config_path]))
+        check_output(Command::new("grep").args(["define", "--", config_path]))
             .expect("grep failed")
             .lines()
             .map(|line| {
-                line.split("undef ")
+                line.split_whitespace()
                     .nth(1)
                     .unwrap_or_else(|| panic!("Could not extract name in line: {line}"))
             })

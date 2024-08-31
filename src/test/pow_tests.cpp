@@ -147,9 +147,9 @@ BOOST_AUTO_TEST_CASE(GetBlockProofEquivalentTime_test)
     }
 
     for (int j = 0; j < 1000; j++) {
-        CBlockIndex *p1 = &blocks[InsecureRandRange(10000)];
-        CBlockIndex *p2 = &blocks[InsecureRandRange(10000)];
-        CBlockIndex *p3 = &blocks[InsecureRandRange(10000)];
+        CBlockIndex *p1 = &blocks[m_rng.randrange(10000)];
+        CBlockIndex *p2 = &blocks[m_rng.randrange(10000)];
+        CBlockIndex *p3 = &blocks[m_rng.randrange(10000)];
 
         int64_t tdiff = GetBlockProofEquivalentTime(*p1, *p2, *p3, chainParams->GetConsensus());
         BOOST_CHECK_EQUAL(tdiff, p1->GetBlockTime() - p2->GetBlockTime());
@@ -196,6 +196,11 @@ BOOST_AUTO_TEST_CASE(ChainParams_REGTEST_sanity)
 BOOST_AUTO_TEST_CASE(ChainParams_TESTNET_sanity)
 {
     sanity_check_chainparams(*m_node.args, ChainType::TESTNET);
+}
+
+BOOST_AUTO_TEST_CASE(ChainParams_TESTNET4_sanity)
+{
+    sanity_check_chainparams(*m_node.args, ChainType::TESTNET4);
 }
 
 BOOST_AUTO_TEST_CASE(ChainParams_SIGNET_sanity)

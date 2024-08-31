@@ -8,6 +8,7 @@
 #include <key_io.h>
 #include <span.h>
 #include <streams.h>
+#include <secp256k1_extrakeys.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
@@ -299,18 +300,31 @@ BOOST_AUTO_TEST_CASE(bip340_test_vectors)
         // Verify those signatures for good measure.
         BOOST_CHECK(pubkey.VerifySchnorr(msg256, sig64));
 
+        // Repeat the same check, but use the KeyPair directly without any merkle tweak
+        KeyPair keypair = key.ComputeKeyPair(/*merkle_root=*/nullptr);
+        bool kp_ok = keypair.SignSchnorr(msg256, sig64, aux256);
+        BOOST_CHECK(kp_ok);
+        BOOST_CHECK(pubkey.VerifySchnorr(msg256, sig64));
+        BOOST_CHECK(std::vector<unsigned char>(sig64, sig64 + 64) == sig);
+
         // Do 10 iterations where we sign with a random Merkle root to tweak,
         // and compare against the resulting tweaked keys, with random aux.
         // In iteration i=0 we tweak with empty Merkle tree.
         for (int i = 0; i < 10; ++i) {
             uint256 merkle_root;
-            if (i) merkle_root = InsecureRand256();
+            if (i) merkle_root = m_rng.rand256();
             auto tweaked = pubkey.CreateTapTweak(i ? &merkle_root : nullptr);
             BOOST_CHECK(tweaked);
             XOnlyPubKey tweaked_key = tweaked->first;
-            aux256 = InsecureRand256();
+            aux256 = m_rng.rand256();
             bool ok = key.SignSchnorr(msg256, sig64, &merkle_root, aux256);
             BOOST_CHECK(ok);
+            BOOST_CHECK(tweaked_key.VerifySchnorr(msg256, sig64));
+
+            // Repeat the same check, but use the KeyPair class directly
+            KeyPair keypair = key.ComputeKeyPair(&merkle_root);
+            bool kp_ok = keypair.SignSchnorr(msg256, sig64, aux256);
+            BOOST_CHECK(kp_ok);
             BOOST_CHECK(tweaked_key.VerifySchnorr(msg256, sig64));
         }
     }
@@ -322,7 +336,7 @@ BOOST_AUTO_TEST_CASE(key_ellswift)
         CKey key = DecodeSecret(secret);
         BOOST_CHECK(key.IsValid());
 
-        uint256 ent32 = InsecureRand256();
+        uint256 ent32 = m_rng.rand256();
         auto ellswift = key.EllSwiftCreate(AsBytes(Span{ent32}));
 
         CPubKey decoded_pubkey = ellswift.Decode();
@@ -343,6 +357,33 @@ BOOST_AUTO_TEST_CASE(bip341_test_h)
     hw.write(MakeByteSpan(G_uncompressed));
     XOnlyPubKey H{hw.GetSHA256()};
     BOOST_CHECK(XOnlyPubKey::NUMS_H == H);
+}
+
+BOOST_AUTO_TEST_CASE(key_schnorr_tweak_smoke_test)
+{
+    // Sanity check to ensure we get the same tweak using CPubKey vs secp256k1 functions
+    secp256k1_context* secp256k1_context_sign = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
+
+    CKey key;
+    key.MakeNewKey(true);
+    uint256 merkle_root = m_rng.rand256();
+
+    // secp256k1 functions
+    secp256k1_keypair keypair;
+    BOOST_CHECK(secp256k1_keypair_create(secp256k1_context_sign, &keypair, UCharCast(key.begin())));
+    secp256k1_xonly_pubkey xonly_pubkey;
+    BOOST_CHECK(secp256k1_keypair_xonly_pub(secp256k1_context_sign, &xonly_pubkey, nullptr, &keypair));
+    unsigned char xonly_bytes[32];
+    BOOST_CHECK(secp256k1_xonly_pubkey_serialize(secp256k1_context_sign, xonly_bytes, &xonly_pubkey));
+    uint256 tweak_old = XOnlyPubKey(xonly_bytes).ComputeTapTweakHash(&merkle_root);
+
+    // CPubKey
+    CPubKey pubkey = key.GetPubKey();
+    uint256 tweak_new = XOnlyPubKey(pubkey).ComputeTapTweakHash(&merkle_root);
+
+    BOOST_CHECK_EQUAL(tweak_old, tweak_new);
+
+    secp256k1_context_destroy(secp256k1_context_sign);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

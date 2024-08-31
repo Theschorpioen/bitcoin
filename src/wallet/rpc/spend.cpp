@@ -24,7 +24,7 @@
 #include <univalue.h>
 
 using common::FeeModeFromString;
-using common::FeeModes;
+using common::FeeModesDetail;
 using common::InvalidEstimateModeErrorMessage;
 using common::StringForFeeReason;
 using common::TransactionErrorString;
@@ -245,7 +245,7 @@ RPCHelpMan sendtoaddress()
                     {"replaceable", RPCArg::Type::BOOL, RPCArg::DefaultHint{"wallet default"}, "Signal that this transaction can be replaced by a transaction (BIP 125)"},
                     {"conf_target", RPCArg::Type::NUM, RPCArg::DefaultHint{"wallet -txconfirmtarget"}, "Confirmation target in blocks"},
                     {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"unset"}, "The fee estimate mode, must be one of (case insensitive):\n"
-                     "\"" + FeeModes("\"\n\"") + "\""},
+                      + FeeModesDetail(std::string("economical mode is used if the transaction is replaceable;\notherwise, conservative mode is used"))},
                     {"avoid_reuse", RPCArg::Type::BOOL, RPCArg::Default{true}, "(only available if avoid_reuse wallet flag is set) Avoid spending from dirty addresses; addresses are considered\n"
                                          "dirty if they have previously been used in a transaction. If true, this also activates avoidpartialspends, grouping outputs by their addresses."},
                     {"fee_rate", RPCArg::Type::AMOUNT, RPCArg::DefaultHint{"not set, fall back to wallet fee estimation"}, "Specify a fee rate in " + CURRENCY_ATOM + "/vB."},
@@ -349,7 +349,7 @@ RPCHelpMan sendmany()
                     {"replaceable", RPCArg::Type::BOOL, RPCArg::DefaultHint{"wallet default"}, "Signal that this transaction can be replaced by a transaction (BIP 125)"},
                     {"conf_target", RPCArg::Type::NUM, RPCArg::DefaultHint{"wallet -txconfirmtarget"}, "Confirmation target in blocks"},
                     {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"unset"}, "The fee estimate mode, must be one of (case insensitive):\n"
-                     "\"" + FeeModes("\"\n\"") + "\""},
+                      + FeeModesDetail(std::string("economical mode is used if the transaction is replaceable;\notherwise, conservative mode is used"))},
                     {"fee_rate", RPCArg::Type::AMOUNT, RPCArg::DefaultHint{"not set, fall back to wallet fee estimation"}, "Specify a fee rate in " + CURRENCY_ATOM + "/vB."},
                     {"verbose", RPCArg::Type::BOOL, RPCArg::Default{false}, "If true, return extra information about the transaction."},
                 },
@@ -463,7 +463,7 @@ static std::vector<RPCArg> FundTxDoc(bool solving_data = true)
     std::vector<RPCArg> args = {
         {"conf_target", RPCArg::Type::NUM, RPCArg::DefaultHint{"wallet -txconfirmtarget"}, "Confirmation target in blocks", RPCArgOptions{.also_positional = true}},
         {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"unset"}, "The fee estimate mode, must be one of (case insensitive):\n"
-         "\"" + FeeModes("\"\n\"") + "\"", RPCArgOptions{.also_positional = true}},
+          + FeeModesDetail(std::string("economical mode is used if the transaction is replaceable;\notherwise, conservative mode is used")), RPCArgOptions{.also_positional = true}},
         {
             "replaceable", RPCArg::Type::BOOL, RPCArg::DefaultHint{"wallet default"}, "Marks this transaction as BIP125-replaceable.\n"
             "Allows this transaction to be replaced by a transaction with higher fees"
@@ -661,11 +661,13 @@ CreatedTransactionResult FundTransaction(CWallet& wallet, const CMutableTransact
                 FlatSigningProvider desc_out;
                 std::string error;
                 std::vector<CScript> scripts_temp;
-                std::unique_ptr<Descriptor> desc = Parse(desc_str, desc_out, error, true);
-                if (!desc) {
+                auto descs = Parse(desc_str, desc_out, error, true);
+                if (descs.empty()) {
                     throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Unable to parse descriptor '%s': %s", desc_str, error));
                 }
-                desc->Expand(0, desc_out, scripts_temp, desc_out);
+                for (auto& desc : descs) {
+                    desc->Expand(0, desc_out, scripts_temp, desc_out);
+                }
                 coinControl.m_external_provider.Merge(std::move(desc_out));
             }
         }
@@ -882,7 +884,7 @@ RPCHelpMan signrawtransactionwithwallet()
                                 {
                                     {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction id"},
                                     {"vout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The output number"},
-                                    {"scriptPubKey", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "script key"},
+                                    {"scriptPubKey", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The output script"},
                                     {"redeemScript", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "(required for P2SH) redeem script"},
                                     {"witnessScript", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "(required for P2WSH or P2SH-P2WSH) witness script"},
                                     {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "(required for Segwit inputs) the amount spent"},
@@ -1018,7 +1020,7 @@ static RPCHelpMan bumpfee_helper(std::string method_name)
                              "still be replaceable in practice, for example if it has unconfirmed ancestors which\n"
                              "are replaceable).\n"},
                     {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"unset"}, "The fee estimate mode, must be one of (case insensitive):\n"
-                             "\"" + FeeModes("\"\n\"") + "\""},
+                              + FeeModesDetail(std::string("economical mode is used if the transaction is replaceable;\notherwise, conservative mode is used"))},
                     {"outputs", RPCArg::Type::ARR, RPCArg::Default{UniValue::VARR}, "The outputs specified as key-value pairs.\n"
                              "Each key may only appear once, i.e. there can only be one 'data' output, and no address may be duplicated.\n"
                              "At least one output of either type must be specified.\n"
@@ -1205,7 +1207,7 @@ RPCHelpMan send()
                 RPCArgOptions{.skip_type_check = true}},
             {"conf_target", RPCArg::Type::NUM, RPCArg::DefaultHint{"wallet -txconfirmtarget"}, "Confirmation target in blocks"},
             {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"unset"}, "The fee estimate mode, must be one of (case insensitive):\n"
-             "\"" + FeeModes("\"\n\"") + "\""},
+              + FeeModesDetail(std::string("economical mode is used if the transaction is replaceable;\notherwise, conservative mode is used"))},
             {"fee_rate", RPCArg::Type::AMOUNT, RPCArg::DefaultHint{"not set, fall back to wallet fee estimation"}, "Specify a fee rate in " + CURRENCY_ATOM + "/vB."},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
                 Cat<std::vector<RPCArg>>(
@@ -1331,7 +1333,7 @@ RPCHelpMan sendall()
             },
             {"conf_target", RPCArg::Type::NUM, RPCArg::DefaultHint{"wallet -txconfirmtarget"}, "Confirmation target in blocks"},
             {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"unset"}, "The fee estimate mode, must be one of (case insensitive):\n"
-             "\"" + FeeModes("\"\n\"") + "\""},
+              + FeeModesDetail(std::string("economical mode is used if the transaction is replaceable;\notherwise, conservative mode is used"))},
             {"fee_rate", RPCArg::Type::AMOUNT, RPCArg::DefaultHint{"not set, fall back to wallet fee estimation"}, "Specify a fee rate in " + CURRENCY_ATOM + "/vB."},
             {
                 "options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",

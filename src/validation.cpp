@@ -40,7 +40,6 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
-#include <reverse_iterator.h>
 #include <script/script.h>
 #include <script/sigcache.h>
 #include <signet.h>
@@ -70,6 +69,7 @@
 #include <deque>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -2902,7 +2902,7 @@ bool Chainstate::FlushStateToDisk(
                 return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
             }
             // Flush the chainstate (which may refer to block index entries).
-            const auto empty_cache{(mode == FlushStateMode::ALWAYS) || fCacheLarge || fCacheCritical || fFlushForPrune};
+            const auto empty_cache{(mode == FlushStateMode::ALWAYS) || fCacheLarge || fCacheCritical};
             if (empty_cache ? !CoinsTip().Flush() : !CoinsTip().Sync()) {
                 return FatalError(m_chainman.GetNotifications(), state, _("Failed to write to coin database."));
             }
@@ -3357,7 +3357,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
         nHeight = nTargetHeight;
 
         // Connect new blocks.
-        for (CBlockIndex* pindexConnect : reverse_iterate(vpindexToConnect)) {
+        for (CBlockIndex* pindexConnect : vpindexToConnect | std::views::reverse) {
             if (!ConnectTip(state, pindexConnect, pindexConnect == pindexMostWork ? pblock : std::shared_ptr<const CBlock>(), connectTrace, disconnectpool)) {
                 if (state.IsInvalid()) {
                     // The block violates a consensus rule.
@@ -4181,6 +4181,18 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
     // Check timestamp against prev
     if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "time-too-old", "block's timestamp is too early");
+
+    // Testnet4 and regtest only: Check timestamp against prev for difficulty-adjustment
+    // blocks to prevent timewarp attacks (see https://github.com/bitcoin/bitcoin/pull/15482).
+    if (consensusParams.enforce_BIP94) {
+        // Check timestamp for the first block of each difficulty adjustment
+        // interval, except the genesis block.
+        if (nHeight % consensusParams.DifficultyAdjustmentInterval() == 0) {
+            if (block.GetBlockTime() < pindexPrev->GetBlockTime() - MAX_TIMEWARP) {
+                return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "time-timewarp-attack", "block's timestamp is too early on diff adjustment block");
+            }
+        }
+    }
 
     // Check timestamp
     if (block.Time() > NodeClock::now() + std::chrono::seconds{MAX_FUTURE_BLOCK_TIME}) {
@@ -5372,7 +5384,7 @@ void ChainstateManager::CheckBlockIndex()
                     // and the transactions were not pruned (pindexFirstMissing
                     // is null), it is a potential candidate. The check
                     // excludes pruned blocks, because if any blocks were
-                    // pruned between pindex the current chain tip, pindex will
+                    // pruned between pindex and the current chain tip, pindex will
                     // only temporarily be added to setBlockIndexCandidates,
                     // before being moved to m_blocks_unlinked. This check
                     // could be improved to verify that if all blocks between
@@ -5645,17 +5657,18 @@ Chainstate& ChainstateManager::InitializeChainstate(CTxMemPool* mempool)
     return destroyed && !fs::exists(db_path);
 }
 
-util::Result<void> ChainstateManager::ActivateSnapshot(
+util::Result<CBlockIndex*> ChainstateManager::ActivateSnapshot(
         AutoFile& coins_file,
         const SnapshotMetadata& metadata,
         bool in_memory)
 {
     uint256 base_blockhash = metadata.m_base_blockhash;
-    int base_blockheight = metadata.m_base_blockheight;
 
     if (this->SnapshotBlockhash()) {
         return util::Error{Untranslated("Can't activate a snapshot-based chainstate more than once")};
     }
+
+    CBlockIndex* snapshot_start_block{};
 
     {
         LOCK(::cs_main);
@@ -5663,13 +5676,12 @@ util::Result<void> ChainstateManager::ActivateSnapshot(
         if (!GetParams().AssumeutxoForBlockhash(base_blockhash).has_value()) {
             auto available_heights = GetParams().GetAvailableSnapshotHeights();
             std::string heights_formatted = util::Join(available_heights, ", ", [&](const auto& i) { return util::ToString(i); });
-            return util::Error{strprintf(Untranslated("assumeutxo block hash in snapshot metadata not recognized (hash: %s, height: %s). The following snapshot heights are available: %s"),
+            return util::Error{strprintf(Untranslated("assumeutxo block hash in snapshot metadata not recognized (hash: %s). The following snapshot heights are available: %s"),
                 base_blockhash.ToString(),
-                base_blockheight,
                 heights_formatted)};
         }
 
-        CBlockIndex* snapshot_start_block = m_blockman.LookupBlockIndex(base_blockhash);
+        snapshot_start_block = m_blockman.LookupBlockIndex(base_blockhash);
         if (!snapshot_start_block) {
             return util::Error{strprintf(Untranslated("The base block header (%s) must appear in the headers chain. Make sure all headers are syncing, and call loadtxoutset again"),
                           base_blockhash.ToString())};
@@ -5680,7 +5692,7 @@ util::Result<void> ChainstateManager::ActivateSnapshot(
             return util::Error{strprintf(Untranslated("The base block header (%s) is part of an invalid chain"), base_blockhash.ToString())};
         }
 
-        if (!m_best_header || m_best_header->GetAncestor(base_blockheight) != snapshot_start_block) {
+        if (!m_best_header || m_best_header->GetAncestor(snapshot_start_block->nHeight) != snapshot_start_block) {
             return util::Error{Untranslated("A forked headers-chain with more work than the chain with the snapshot base block header exists. Please proceed to sync without AssumeUtxo.")};
         }
 
@@ -5794,7 +5806,7 @@ util::Result<void> ChainstateManager::ActivateSnapshot(
         m_snapshot_chainstate->CoinsTip().DynamicMemoryUsage() / (1000 * 1000));
 
     this->MaybeRebalanceCaches();
-    return {};
+    return snapshot_start_block;
 }
 
 static void FlushSnapshotToDisk(CCoinsViewCache& coins_cache, bool snapshot_loaded)
