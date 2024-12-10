@@ -1,6 +1,6 @@
 # Windows / MSVC Build Guide
 
-This guide describes how to build bitcoind, command-line utilities, and GUI on Windows using Micsrosoft Visual Studio.
+This guide describes how to build bitcoind, command-line utilities, and GUI on Windows using Microsoft Visual Studio.
 
 For cross-compiling options, please see [`build-windows.md`](./build-windows.md).
 
@@ -42,9 +42,7 @@ Available presets can be listed as follows:
 cmake --list-presets
 ```
 
-By default, all presets:
-- Set `BUILD_GUI` to `ON`.
-- Set `WITH_QRENCODE` to `OFF`, due to known build issues when using vcpkg's `libqrencode` package.
+By default, all presets set `BUILD_GUI` to `ON`.
 
 ## Building
 

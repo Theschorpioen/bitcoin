@@ -3,7 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <config/bitcoin-config.h> // IWYU pragma: keep
+#include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <wallet/walletdb.h>
 
@@ -1013,7 +1013,7 @@ static DBErrors LoadAddressBookRecords(CWallet* pwallet, DatabaseBatch& batch) E
             // "1" or "p" for present (which was written prior to
             // f5ba424cd44619d9b9be88b8593d69a7ba96db26).
             pwallet->LoadAddressPreviouslySpent(dest);
-        } else if (strKey.compare(0, 2, "rr") == 0) {
+        } else if (strKey.starts_with("rr")) {
             // Load "rr##" keys where ## is a decimal number, and strValue
             // is a serialized RecentRequestEntry object.
             pwallet->LoadAddressReceiveRequest(dest, strKey.substr(2), strValue);
@@ -1335,10 +1335,8 @@ bool WalletBatch::WriteWalletFlags(const uint64_t flags)
 
 bool WalletBatch::EraseRecords(const std::unordered_set<std::string>& types)
 {
-    return RunWithinTxn(*this, "erase records", [&types](WalletBatch& self) {
-        return std::all_of(types.begin(), types.end(), [&self](const std::string& type) {
-            return self.m_batch->ErasePrefix(DataStream() << type);
-        });
+    return std::all_of(types.begin(), types.end(), [&](const std::string& type) {
+        return m_batch->ErasePrefix(DataStream() << type);
     });
 }
 
@@ -1349,12 +1347,34 @@ bool WalletBatch::TxnBegin()
 
 bool WalletBatch::TxnCommit()
 {
-    return m_batch->TxnCommit();
+    bool res = m_batch->TxnCommit();
+    if (res) {
+        for (const auto& listener : m_txn_listeners) {
+            listener.on_commit();
+        }
+        // txn finished, clear listeners
+        m_txn_listeners.clear();
+    }
+    return res;
 }
 
 bool WalletBatch::TxnAbort()
 {
-    return m_batch->TxnAbort();
+    bool res = m_batch->TxnAbort();
+    if (res) {
+        for (const auto& listener : m_txn_listeners) {
+            listener.on_abort();
+        }
+        // txn finished, clear listeners
+        m_txn_listeners.clear();
+    }
+    return res;
+}
+
+void WalletBatch::RegisterTxnListener(const DbTxnListener& l)
+{
+    assert(m_batch->HasActiveTxn());
+    m_txn_listeners.emplace_back(l);
 }
 
 std::unique_ptr<WalletDatabase> MakeDatabase(const fs::path& path, const DatabaseOptions& options, DatabaseStatus& status, bilingual_str& error)

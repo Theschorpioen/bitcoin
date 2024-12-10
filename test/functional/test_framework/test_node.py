@@ -48,6 +48,7 @@ BITCOIND_PROC_WAIT_TIMEOUT = 60
 NUM_XOR_BYTES = 8
 # The null blocks key (all 0s)
 NULL_BLK_XOR_KEY = bytes([0] * NUM_XOR_BYTES)
+BITCOIN_PID_FILENAME_DEFAULT = "bitcoind.pid"
 
 
 class FailedToStartError(Exception):
@@ -714,7 +715,6 @@ class TestNode():
         if supports_v2_p2p is None:
             supports_v2_p2p = self.use_v2transport
 
-        p2p_conn.p2p_connected_to_node = True
         if self.use_v2transport:
             kwargs['services'] = kwargs.get('services', P2P_SERVICES) | NODE_P2P_V2
         supports_v2_p2p = self.use_v2transport and supports_v2_p2p
@@ -781,7 +781,6 @@ class TestNode():
             self.log.debug("Connecting to %s:%d %s" % (address, port, connection_type))
             self.addconnection('%s:%d' % (address, port), connection_type, advertise_v2_p2p)
 
-        p2p_conn.p2p_connected_to_node = False
         if supports_v2_p2p is None:
             supports_v2_p2p = self.use_v2transport
         if advertise_v2_p2p is None:
@@ -838,8 +837,8 @@ class TestNode():
         self.mocktime += seconds
         self.setmocktime(self.mocktime)
 
-    def wait_until(self, test_function, timeout=60):
-        return wait_until_helper_internal(test_function, timeout=timeout, timeout_factor=self.timeout_factor)
+    def wait_until(self, test_function, timeout=60, check_interval=0.05):
+        return wait_until_helper_internal(test_function, timeout=timeout, timeout_factor=self.timeout_factor, check_interval=check_interval)
 
 
 class TestNodeCLIAttr:

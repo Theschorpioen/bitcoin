@@ -35,6 +35,7 @@ endfunction()
 #  - https://doc.qt.io/qt-5/cmake-manual.html
 
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOMOC_MOC_OPTIONS "-p${CMAKE_CURRENT_SOURCE_DIR}")
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOUIC_SEARCH_PATHS forms)
@@ -46,7 +47,7 @@ file(GLOB ts_files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} locale/*.ts)
 set_source_files_properties(${ts_files} PROPERTIES OUTPUT_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/locale)
 qt5_add_translation(qm_files ${ts_files})
 
-configure_file(bitcoin_locale.qrc bitcoin_locale.qrc COPYONLY)
+configure_file(bitcoin_locale.qrc bitcoin_locale.qrc USE_SOURCE_PERMISSIONS COPYONLY)
 
 # The bitcoinqt sources have to include headers in
 # order to parse them to collect translatable strings.
@@ -133,9 +134,7 @@ target_link_libraries(bitcoinqt
     bitcoin_cli
     leveldb
     Boost::headers
-    $<TARGET_NAME_IF_EXISTS:NATPMP::NATPMP>
-    $<TARGET_NAME_IF_EXISTS:MiniUPnPc::MiniUPnPc>
-    $<TARGET_NAME_IF_EXISTS:PkgConfig::libqrencode>
+    $<TARGET_NAME_IF_EXISTS:QRencode::QRencode>
     $<$<PLATFORM_ID:Darwin>:-framework\ AppKit>
     $<$<CXX_COMPILER_ID:MSVC>:shlwapi>
 )
