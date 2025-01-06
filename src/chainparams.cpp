@@ -44,6 +44,7 @@ void ReadSigNetArgs(const ArgsManager& args, CChainParams::SigNetOptions& option
 void ReadRegTestArgs(const ArgsManager& args, CChainParams::RegTestOptions& options)
 {
     if (auto value = args.GetBoolArg("-fastprune")) options.fastprune = *value;
+    if (HasTestOption(args, "bip94")) options.enforce_bip94 = true;
 
     for (const std::string& arg : args.GetArgs("-testactivationheight")) {
         const auto found{arg.find('@')};
@@ -115,6 +116,8 @@ std::unique_ptr<const CChainParams> CreateChainParams(const ArgsManager& args, c
         return CChainParams::Main();
     case ChainType::TESTNET:
         return CChainParams::TestNet();
+    case ChainType::TESTNET4:
+        return CChainParams::TestNet4();
     case ChainType::SIGNET: {
         auto opts = CChainParams::SigNetOptions{};
         ReadSigNetArgs(args, opts);

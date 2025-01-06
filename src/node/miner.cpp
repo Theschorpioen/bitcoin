@@ -33,6 +33,14 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
     int64_t nOldTime = pblock->nTime;
     int64_t nNewTime{std::max<int64_t>(pindexPrev->GetMedianTimePast() + 1, TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()))};
 
+    if (consensusParams.enforce_BIP94) {
+        // Height of block to be mined.
+        const int height{pindexPrev->nHeight + 1};
+        if (height % consensusParams.DifficultyAdjustmentInterval() == 0) {
+            nNewTime = std::max<int64_t>(nNewTime, pindexPrev->GetBlockTime() - MAX_TIMEWARP);
+        }
+    }
+
     if (nOldTime < nNewTime) {
         pblock->nTime = nNewTime;
     }
@@ -98,17 +106,13 @@ void BlockAssembler::resetBlock()
     nFees = 0;
 }
 
-std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn)
+std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 {
     const auto time_start{SteadyClock::now()};
 
     resetBlock();
 
     pblocktemplate.reset(new CBlockTemplate());
-
-    if (!pblocktemplate.get()) {
-        return nullptr;
-    }
     CBlock* const pblock = &pblocktemplate->block; // pointer for convenience
 
     // Add dummy coinbase tx as first transaction
@@ -134,8 +138,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     int nPackagesSelected = 0;
     int nDescendantsUpdated = 0;
     if (m_mempool) {
-        LOCK(m_mempool->cs);
-        addPackageTxs(*m_mempool, nPackagesSelected, nDescendantsUpdated);
+        addPackageTxs(nPackagesSelected, nDescendantsUpdated);
     }
 
     const auto time_1{SteadyClock::now()};
@@ -148,7 +151,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     coinbaseTx.vin.resize(1);
     coinbaseTx.vin[0].prevout.SetNull();
     coinbaseTx.vout.resize(1);
-    coinbaseTx.vout[0].scriptPubKey = scriptPubKeyIn;
+    coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
     coinbaseTx.vout[0].nValue = nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus());
     coinbaseTx.vin[0].scriptSig = CScript() << nHeight << OP_0;
     pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
@@ -171,7 +174,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     }
     const auto time_2{SteadyClock::now()};
 
-    LogPrint(BCLog::BENCH, "CreateNewBlock() packages: %.2fms (%d packages, %d updated descendants), validity: %.2fms (total %.2fms)\n",
+    LogDebug(BCLog::BENCH, "CreateNewBlock() packages: %.2fms (%d packages, %d updated descendants), validity: %.2fms (total %.2fms)\n",
              Ticks<MillisecondsDouble>(time_1 - time_start), nPackagesSelected, nDescendantsUpdated,
              Ticks<MillisecondsDouble>(time_2 - time_1),
              Ticks<MillisecondsDouble>(time_2 - time_start));
@@ -284,9 +287,10 @@ void BlockAssembler::SortForBlock(const CTxMemPool::setEntries& package, std::ve
 // Each time through the loop, we compare the best transaction in
 // mapModifiedTxs with the next transaction in the mempool to decide what
 // transaction package to work on next.
-void BlockAssembler::addPackageTxs(const CTxMemPool& mempool, int& nPackagesSelected, int& nDescendantsUpdated)
+void BlockAssembler::addPackageTxs(int& nPackagesSelected, int& nDescendantsUpdated)
 {
-    AssertLockHeld(mempool.cs);
+    const auto& mempool{*Assert(m_mempool)};
+    LOCK(mempool.cs);
 
     // mapModifiedTx will store sorted packages after they are modified
     // because some of their txs are already in the block

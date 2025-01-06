@@ -155,12 +155,14 @@ public:
         std::unordered_map<Consensus::DeploymentPos, VersionBitsParameters> version_bits_parameters{};
         std::unordered_map<Consensus::BuriedDeployment, int> activation_heights{};
         bool fastprune{false};
+        bool enforce_bip94{false};
     };
 
     static std::unique_ptr<const CChainParams> RegTest(const RegTestOptions& options);
     static std::unique_ptr<const CChainParams> SigNet(const SigNetOptions& options);
     static std::unique_ptr<const CChainParams> Main();
     static std::unique_ptr<const CChainParams> TestNet();
+    static std::unique_ptr<const CChainParams> TestNet4();
 
 protected:
     CChainParams() = default;

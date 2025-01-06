@@ -7,17 +7,18 @@
 #include <logging.h>
 #include <random.h>
 #include <uint256.h>
+#include <util/check.h>
 
 #include <cstdlib>
-#include <string>
+#include <iostream>
 
-FastRandomContext g_insecure_rand_ctx;
+std::atomic<bool> g_seeded_g_prng_zero{false};
 
 extern void MakeRandDeterministicDANGEROUS(const uint256& seed) noexcept;
 
-void SeedRandomForTest(SeedRand seedtype)
+void SeedRandomStateForTest(SeedRand seedtype)
 {
-    static const std::string RANDOM_CTX_SEED{"RANDOM_CTX_SEED"};
+    constexpr auto RANDOM_CTX_SEED{"RANDOM_CTX_SEED"};
 
     // Do this once, on the first call, regardless of seedtype, because once
     // MakeRandDeterministicDANGEROUS is called, the output of GetRandHash is
@@ -25,14 +26,23 @@ void SeedRandomForTest(SeedRand seedtype)
     // process.
     static const uint256 ctx_seed = []() {
         // If RANDOM_CTX_SEED is set, use that as seed.
-        const char* num = std::getenv(RANDOM_CTX_SEED.c_str());
-        if (num) return uint256S(num);
+        if (const char* num{std::getenv(RANDOM_CTX_SEED)}) {
+            if (auto num_parsed{uint256::FromUserHex(num)}) {
+                return *num_parsed;
+            } else {
+                std::cerr << RANDOM_CTX_SEED << " must consist of up to " << uint256::size() * 2 << " hex digits (\"0x\" prefix allowed), it was set to: '" << num << "'.\n";
+                std::abort();
+            }
+        }
         // Otherwise use a (truly) random value.
         return GetRandHash();
     }();
 
-    const uint256& seed{seedtype == SeedRand::SEED ? ctx_seed : uint256::ZERO};
-    LogPrintf("%s: Setting random seed for current tests to %s=%s\n", __func__, RANDOM_CTX_SEED, seed.GetHex());
+    g_seeded_g_prng_zero = seedtype == SeedRand::ZEROS;
+    if constexpr (G_FUZZING) {
+        Assert(g_seeded_g_prng_zero); // Only SeedRandomStateForTest(SeedRand::ZEROS) is allowed in fuzz tests
+    }
+    const uint256& seed{seedtype == SeedRand::FIXED_SEED ? ctx_seed : uint256::ZERO};
+    LogInfo("Setting random seed for current tests to %s=%s\n", RANDOM_CTX_SEED, seed.GetHex());
     MakeRandDeterministicDANGEROUS(seed);
-    g_insecure_rand_ctx.Reseed(GetRandHash());
 }

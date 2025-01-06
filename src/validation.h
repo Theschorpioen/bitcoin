@@ -39,9 +39,9 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdint.h>
 #include <string>
-#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -78,6 +78,9 @@ static constexpr int DEFAULT_CHECKLEVEL{3};
 // Setting the target to >= 550 MiB will make it likely we can respect the target.
 static const uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES = 550 * 1024 * 1024;
 
+/** Maximum number of dedicated script-checking threads allowed */
+static constexpr int MAX_SCRIPTCHECK_THREADS{15};
+
 /** Current sync state passed to tip changed callbacks. */
 enum class SynchronizationState {
     INIT_REINDEX,
@@ -85,20 +88,12 @@ enum class SynchronizationState {
     POST_INIT
 };
 
-extern GlobalMutex g_best_block_mutex;
-extern std::condition_variable g_best_block_cv;
-/** Used to notify getblocktemplate RPC of new tips. */
-extern uint256 g_best_block;
-
 /** Documentation for argument 'checklevel'. */
 extern const std::vector<std::string> CHECKLEVEL_DOC;
 
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams);
 
 bool FatalError(kernel::Notifications& notifications, BlockValidationState& state, const bilingual_str& message);
-
-/** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip). */
-double GuessVerificationProgress(const ChainTxData& data, const CBlockIndex* pindex);
 
 /** Prune block files up to a given height */
 void PruneBlockFilesManual(Chainstate& active_chainstate, int nManualPruneHeight);
@@ -340,7 +335,6 @@ private:
     unsigned int nIn;
     unsigned int nFlags;
     bool cacheStore;
-    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
     PrecomputedTransactionData *txdata;
     SignatureCache* m_signature_cache;
 
@@ -353,9 +347,7 @@ public:
     CScriptCheck(CScriptCheck&&) = default;
     CScriptCheck& operator=(CScriptCheck&&) = default;
 
-    bool operator()();
-
-    ScriptError GetScriptError() const { return error; }
+    std::optional<std::pair<ScriptError, std::string>> operator()();
 };
 
 // CScriptCheck is used a lot in std::vector, make sure that's efficient
@@ -407,7 +399,7 @@ bool HasValidProofOfWork(const std::vector<CBlockHeader>& headers, const Consens
 bool IsBlockMutated(const CBlock& block, bool check_witness_root);
 
 /** Return the sum of the claimed work on a given set of headers. No verification of PoW is done. */
-arith_uint256 CalculateClaimedHeadersWork(const std::vector<CBlockHeader>& headers);
+arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers);
 
 enum class VerifyDBResult {
     SUCCESS,
@@ -734,6 +726,9 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
+    /** Set invalidity status to all descendants of a block */
+    void SetBlockFailureFlags(CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
     /** Remove invalidity status from a block and its descendants. */
     void ResetBlockFailureFlags(CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
@@ -914,7 +909,7 @@ private:
     //! Internal helper for ActivateSnapshot().
     //!
     //! De-serialization of a snapshot that is created with
-    //! CreateUTXOSnapshot() in rpc/blockchain.cpp.
+    //! the dumptxoutset RPC.
     //! To reduce space the serialization format of the snapshot avoids
     //! duplication of tx hashes. The code takes advantage of the guarantee by
     //! leveldb that keys are lexicographically sorted.
@@ -976,7 +971,7 @@ public:
 
     //! Function to restart active indexes; set dynamically to avoid a circular
     //! dependency on `base/index.cpp`.
-    std::function<void()> restart_indexes = std::function<void()>();
+    std::function<void()> snapshot_download_completed = std::function<void()>();
 
     const CChainParams& GetParams() const { return m_options.chainparams; }
     const Consensus::Params& GetConsensus() const { return m_options.chainparams.GetConsensus(); }
@@ -1007,7 +1002,6 @@ public:
 
     const util::SignalInterrupt& m_interrupt;
     const Options m_options;
-    std::thread m_thread_load;
     //! A single BlockManager instance is shared across each constructed
     //! chainstate to avoid duplicating block metadata.
     node::BlockManager m_blockman;
@@ -1094,11 +1088,10 @@ public:
     //! - Verify that the hash of the resulting coinsdb matches the expected hash
     //!   per assumeutxo chain parameters.
     //! - Wait for our headers chain to include the base block of the snapshot.
-    //! - "Fast forward" the tip of the new chainstate to the base of the snapshot,
-    //!   faking nTx* block index data along the way.
+    //! - "Fast forward" the tip of the new chainstate to the base of the snapshot.
     //! - Move the new chainstate to `m_snapshot_chainstate` and make it our
     //!   ChainstateActive().
-    [[nodiscard]] util::Result<void> ActivateSnapshot(
+    [[nodiscard]] util::Result<CBlockIndex*> ActivateSnapshot(
         AutoFile& coins_file, const node::SnapshotMetadata& metadata, bool in_memory);
 
     //! Once the background validation chainstate has reached the height which
@@ -1154,6 +1147,9 @@ public:
 
     /** Check whether we are doing an initial block download (synchronizing from disk or network) */
     bool IsInitialBlockDownload() const;
+
+    /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip). */
+    double GuessVerificationProgress(const CBlockIndex* pindex) const;
 
     /**
      * Import blocks from an external file
@@ -1218,12 +1214,12 @@ public:
      * May not be called in a
      * validationinterface callback.
      *
-     * @param[in]  block The block headers themselves
+     * @param[in]  headers The block headers themselves
      * @param[in]  min_pow_checked  True if proof-of-work anti-DoS checks have been done by caller for headers chain
      * @param[out] state This may be set to an Error state if any error occurred processing them
      * @param[out] ppindex If set, the pointer will be set to point to the last new block index object for the given headers
      */
-    bool ProcessNewBlockHeaders(const std::vector<CBlockHeader>& block, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
+    bool ProcessNewBlockHeaders(std::span<const CBlockHeader> headers, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
 
     /**
      * Sufficiently validate a block for disk storage (and store on disk).
@@ -1320,6 +1316,11 @@ public:
     //! Return the height of the base block of the snapshot in use, if one exists, else
     //! nullopt.
     std::optional<int> GetSnapshotBaseHeight() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    //! If, due to invalidation / reconsideration of blocks, the previous
+    //! best header is no longer valid / guaranteed to be the most-work
+    //! header in our block-index not known to be invalid, recalculate it.
+    void RecalculateBestHeader() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
 
