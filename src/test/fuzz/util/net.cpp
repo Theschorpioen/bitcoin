@@ -1,4 +1,4 @@
-// Copyright (c) 2009-2022 The Bitcoin Core developers
+// Copyright (c) 2009-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <ranges>
 #include <thread>
 #include <vector>
 
@@ -110,10 +111,11 @@ P ConsumeDeserializationParams(FuzzedDataProvider& fuzzed_data_provider) noexcep
 template CNetAddr::SerParams ConsumeDeserializationParams(FuzzedDataProvider&) noexcept;
 template CAddress::SerParams ConsumeDeserializationParams(FuzzedDataProvider&) noexcept;
 
-FuzzedSock::FuzzedSock(FuzzedDataProvider& fuzzed_data_provider)
+FuzzedSock::FuzzedSock(FuzzedDataProvider& fuzzed_data_provider, FakeSteadyClock& clock)
     : Sock{fuzzed_data_provider.ConsumeIntegralInRange<SOCKET>(INVALID_SOCKET - 1, INVALID_SOCKET)},
       m_fuzzed_data_provider{fuzzed_data_provider},
-      m_selectable{fuzzed_data_provider.ConsumeBool()}
+      m_selectable{fuzzed_data_provider.ConsumeBool()},
+      m_clock{clock}
 {
 }
 
@@ -304,7 +306,34 @@ std::unique_ptr<Sock> FuzzedSock::Accept(sockaddr* addr, socklen_t* addr_len) co
         SetFuzzedErrNo(m_fuzzed_data_provider, accept_errnos);
         return std::unique_ptr<FuzzedSock>();
     }
-    return std::make_unique<FuzzedSock>(m_fuzzed_data_provider);
+    if (addr != nullptr) {
+        // Set a fuzzed address in the output argument addr.
+        memset(addr, 0x00, *addr_len);
+        if (m_fuzzed_data_provider.ConsumeBool()) {
+            // IPv4
+            const socklen_t write_len = static_cast<socklen_t>(sizeof(sockaddr_in));
+            if (*addr_len >= write_len) {
+                *addr_len = write_len;
+                auto addr4 = reinterpret_cast<sockaddr_in*>(addr);
+                addr4->sin_family = AF_INET;
+                const auto sin_addr_bytes{m_fuzzed_data_provider.ConsumeBytes<std::byte>(sizeof(addr4->sin_addr))};
+                std::ranges::copy(sin_addr_bytes, reinterpret_cast<std::byte*>(&addr4->sin_addr));
+                addr4->sin_port = m_fuzzed_data_provider.ConsumeIntegralInRange<uint16_t>(1, 65535);
+            }
+        } else {
+            // IPv6
+            const socklen_t write_len = static_cast<socklen_t>(sizeof(sockaddr_in6));
+            if (*addr_len >= write_len) {
+                *addr_len = write_len;
+                auto addr6 = reinterpret_cast<sockaddr_in6*>(addr);
+                addr6->sin6_family = AF_INET6;
+                const auto sin_addr_bytes{m_fuzzed_data_provider.ConsumeBytes<std::byte>(sizeof(addr6->sin6_addr))};
+                std::ranges::copy(sin_addr_bytes, reinterpret_cast<std::byte*>(&addr6->sin6_addr));
+                addr6->sin6_port = m_fuzzed_data_provider.ConsumeIntegralInRange<uint16_t>(1, 65535);
+            }
+        }
+    }
+    return std::make_unique<FuzzedSock>(m_fuzzed_data_provider, m_clock);
 }
 
 int FuzzedSock::GetSockOpt(int level, int opt_name, void* opt_val, socklen_t* opt_len) const
@@ -349,7 +378,11 @@ int FuzzedSock::GetSockName(sockaddr* name, socklen_t* name_len) const
         SetFuzzedErrNo(m_fuzzed_data_provider, getsockname_errnos);
         return -1;
     }
-    *name_len = m_fuzzed_data_provider.ConsumeData(name, *name_len);
+    assert(name_len);
+    const auto bytes{ConsumeRandomLengthByteVector(m_fuzzed_data_provider, *name_len)};
+    if (bytes.size() < (int)sizeof(sockaddr)) return -1;
+    std::memcpy(name, bytes.data(), bytes.size());
+    *name_len = bytes.size();
     return 0;
 }
 
@@ -388,6 +421,7 @@ bool FuzzedSock::Wait(std::chrono::milliseconds timeout, Event requested, Event*
         // FuzzedDataProvider runs out of data.
         *occurred = m_fuzzed_data_provider.ConsumeBool() ? 0 : requested;
     }
+    m_clock += timeout;
     return true;
 }
 
@@ -400,6 +434,7 @@ bool FuzzedSock::WaitMany(std::chrono::milliseconds timeout, EventsPerSock& even
         // FuzzedDataProvider runs out of data.
         events.occurred = m_fuzzed_data_provider.ConsumeBool() ? 0 : events.requested;
     }
+    m_clock += timeout;
     return true;
 }
 

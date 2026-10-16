@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2022 The Bitcoin Core developers
+// Copyright (c) 2009-present The Bitcoin Core developers
 // Copyright (c) 2017 The Zcash developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
@@ -12,12 +12,17 @@
 #include <span.h>
 #include <uint256.h>
 
+#include <array>
+#include <cassert>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <vector>
 
-const unsigned int BIP32_EXTKEY_SIZE = 74;
-const unsigned int BIP32_EXTKEY_WITH_VERSION_SIZE = 78;
+inline constexpr unsigned int BIP32_EXTKEY_SIZE = 74;
+inline constexpr unsigned int BIP32_EXTKEY_WITH_VERSION_SIZE = 78;
+
+using KeyFingerprint = std::array<unsigned char, 4>;
 
 /** A reference to a CKey: the Hash160 of its serialized public key */
 class CKeyID : public uint160
@@ -25,9 +30,13 @@ class CKeyID : public uint160
 public:
     CKeyID() : uint160() {}
     explicit CKeyID(const uint160& in) : uint160(in) {}
+    KeyFingerprint fingerprint() const
+    {
+        KeyFingerprint ret;
+        std::copy_n(begin(), ret.size(), ret.begin());
+        return ret;
+    }
 };
-
-typedef uint256 ChainCode;
 
 /** An encapsulated public key. */
 class CPubKey
@@ -103,7 +112,7 @@ public:
     }
 
     //! Construct a public key from a byte vector.
-    explicit CPubKey(Span<const uint8_t> _vch)
+    explicit CPubKey(std::span<const uint8_t> _vch)
     {
         Set(_vch.begin(), _vch.end());
     }
@@ -120,10 +129,6 @@ public:
     {
         return a.vch[0] == b.vch[0] &&
                memcmp(a.vch, b.vch, a.size()) == 0;
-    }
-    friend bool operator!=(const CPubKey& a, const CPubKey& b)
-    {
-        return !(a == b);
     }
     friend bool operator<(const CPubKey& a, const CPubKey& b)
     {
@@ -142,14 +147,14 @@ public:
     {
         unsigned int len = size();
         ::WriteCompactSize(s, len);
-        s << Span{vch, len};
+        s << std::span{vch, len};
     }
     template <typename Stream>
     void Unserialize(Stream& s)
     {
         const unsigned int len(::ReadCompactSize(s));
         if (len <= SIZE) {
-            s >> Span{vch, len};
+            s >> std::span{vch, len};
             if (len != size()) {
                 Invalidate();
             }
@@ -163,13 +168,13 @@ public:
     //! Get the KeyID of this public key (hash of its serialization)
     CKeyID GetID() const
     {
-        return CKeyID(Hash160(Span{vch}.first(size())));
+        return CKeyID(Hash160(std::span{vch}.first(size())));
     }
 
     //! Get the 256-bit hash of this public key.
     uint256 GetHash() const
     {
-        return Hash(Span{vch}.first(size()));
+        return Hash(std::span{vch}.first(size()));
     }
 
     /*
@@ -224,7 +229,7 @@ public:
     bool Decompress();
 
     //! Derive BIP32 child pubkey.
-    [[nodiscard]] bool Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const;
+    [[nodiscard]] bool Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc, uint256* bip32_tweak_out = nullptr) const;
 };
 
 class XOnlyPubKey
@@ -257,13 +262,13 @@ public:
     constexpr explicit XOnlyPubKey(std::span<const unsigned char> bytes) : m_keydata{bytes} {}
 
     /** Construct an x-only pubkey from a normal pubkey. */
-    explicit XOnlyPubKey(const CPubKey& pubkey) : XOnlyPubKey(Span{pubkey}.subspan(1, 32)) {}
+    explicit XOnlyPubKey(const CPubKey& pubkey) : XOnlyPubKey(std::span{pubkey}.subspan(1, 32)) {}
 
     /** Verify a Schnorr signature against this public key.
      *
      * sigbytes must be exactly 64 bytes.
      */
-    bool VerifySchnorr(const uint256& msg, Span<const unsigned char> sigbytes) const;
+    bool VerifySchnorr(const uint256& msg, std::span<const unsigned char> sigbytes) const;
 
     /** Compute the Taproot tweak as specified in BIP341, with *this as internal
      * key:
@@ -283,9 +288,13 @@ public:
     std::optional<std::pair<XOnlyPubKey, bool>> CreateTapTweak(const uint256* merkle_root) const;
 
     /** Returns a list of CKeyIDs for the CPubKeys that could have been used to create this XOnlyPubKey.
+     * As the CKeyID is the Hash160(full pubkey), the produced CKeyIDs are for the versions of this
+     * XOnlyPubKey with 0x02 and 0x03 prefixes.
      * This is needed for key lookups since keys are indexed by CKeyID.
      */
     std::vector<CKeyID> GetKeyIDs() const;
+    /** Returns this XOnlyPubKey with 0x02 and 0x03 prefixes */
+    std::vector<CPubKey> GetCPubKeys() const;
 
     CPubKey GetEvenCorrespondingCPubKey() const;
 
@@ -298,7 +307,6 @@ public:
     unsigned char* begin() { return m_keydata.begin(); }
     unsigned char* end() { return m_keydata.end(); }
     bool operator==(const XOnlyPubKey& other) const { return m_keydata == other.m_keydata; }
-    bool operator!=(const XOnlyPubKey& other) const { return m_keydata != other.m_keydata; }
     bool operator<(const XOnlyPubKey& other) const { return m_keydata < other.m_keydata; }
 
     //! Implement serialization without length prefixes since it is a fixed length
@@ -317,7 +325,7 @@ public:
     EllSwiftPubKey() noexcept = default;
 
     /** Construct a new ellswift public key from a given serialization. */
-    EllSwiftPubKey(Span<const std::byte> ellswift) noexcept;
+    EllSwiftPubKey(std::span<const std::byte> ellswift) noexcept;
 
     /** Decode to normal compressed CPubKey (for debugging purposes). */
     CPubKey Decode() const;
@@ -332,17 +340,12 @@ public:
     {
         return a.m_pubkey == b.m_pubkey;
     }
-
-    bool friend operator!=(const EllSwiftPubKey& a, const EllSwiftPubKey& b)
-    {
-        return a.m_pubkey != b.m_pubkey;
-    }
 };
 
 struct CExtPubKey {
     unsigned char version[4];
     unsigned char nDepth;
-    unsigned char vchFingerprint[4];
+    KeyFingerprint fingerprint;
     unsigned int nChild;
     ChainCode chaincode;
     CPubKey pubkey;
@@ -350,15 +353,10 @@ struct CExtPubKey {
     friend bool operator==(const CExtPubKey &a, const CExtPubKey &b)
     {
         return a.nDepth == b.nDepth &&
-            memcmp(a.vchFingerprint, b.vchFingerprint, sizeof(vchFingerprint)) == 0 &&
+            a.fingerprint == b.fingerprint &&
             a.nChild == b.nChild &&
             a.chaincode == b.chaincode &&
             a.pubkey == b.pubkey;
-    }
-
-    friend bool operator!=(const CExtPubKey &a, const CExtPubKey &b)
-    {
-        return !(a == b);
     }
 
     friend bool operator<(const CExtPubKey &a, const CExtPubKey &b)
@@ -371,11 +369,27 @@ struct CExtPubKey {
         return a.chaincode < b.chaincode;
     }
 
-    void Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const;
-    void Decode(const unsigned char code[BIP32_EXTKEY_SIZE]);
-    void EncodeWithVersion(unsigned char code[BIP32_EXTKEY_WITH_VERSION_SIZE]) const;
-    void DecodeWithVersion(const unsigned char code[BIP32_EXTKEY_WITH_VERSION_SIZE]);
-    [[nodiscard]] bool Derive(CExtPubKey& out, unsigned int nChild) const;
+    KeyFingerprint id_key_fingerprint() const
+    {
+        return pubkey.GetID().fingerprint();
+    }
+
+    //! BIP32 serialization without the version bytes (BIP32_EXTKEY_SIZE bytes)
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        assert(pubkey.size() == CPubKey::COMPRESSED_SIZE);
+        s << nDepth << fingerprint << Using<BigEndianFormatter<4>>(nChild) << chaincode << std::span{pubkey.data(), CPubKey::COMPRESSED_SIZE};
+    }
+    template <typename Stream>
+    void Unserialize(Stream& s)
+    {
+        std::array<unsigned char, CPubKey::COMPRESSED_SIZE> ser_pubkey;
+        s >> nDepth >> fingerprint >> Using<BigEndianFormatter<4>>(nChild) >> chaincode >> ser_pubkey;
+        pubkey.Set(ser_pubkey.begin(), ser_pubkey.end());
+        if ((nDepth == 0 && (nChild != 0 || fingerprint != KeyFingerprint{})) || !pubkey.IsFullyValid()) pubkey = CPubKey();
+    }
+    [[nodiscard]] bool Derive(CExtPubKey& out, unsigned int nChild, uint256* bip32_tweak_out = nullptr) const;
 };
 
 #endif // BITCOIN_PUBKEY_H

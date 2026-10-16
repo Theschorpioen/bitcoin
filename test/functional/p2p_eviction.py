@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2019-2021 The Bitcoin Core developers
+# Copyright (c) 2019-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -16,7 +16,6 @@ import time
 
 from test_framework.blocktools import (
     create_block,
-    create_coinbase,
 )
 from test_framework.messages import (
     msg_pong,
@@ -34,22 +33,24 @@ from test_framework.wallet import MiniWallet
 class SlowP2PDataStore(P2PDataStore):
     def on_ping(self, message):
         time.sleep(0.1)
-        self.send_message(msg_pong(message.nonce))
+        self.send_without_ping(msg_pong(message.nonce))
 
 
 class SlowP2PInterface(P2PInterface):
     def on_ping(self, message):
         time.sleep(0.1)
-        self.send_message(msg_pong(message.nonce))
+        self.send_without_ping(msg_pong(message.nonce))
 
 
 class P2PEvict(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
-        # The choice of maxconnections=32 results in a maximum of 21 inbound connections
-        # (32 - 10 outbound - 1 feeler). 20 inbound peers are protected from eviction:
+        # The choice of maxconnections=53 results in a maximum of 21 tx-relaying inbound connections
+        # (53 - 10 outbound - 1 feeler) * 0.5 = 21. The other inbound slots are reserved for block-relay-only
+        # peers that don't play a role in this test.
+        # 20 inbound peers are protected from eviction:
         # 4 by netgroup, 4 that sent us blocks, 4 that sent us transactions and 8 via lowest ping time
-        self.extra_args = [['-maxconnections=32']]
+        self.extra_args = [['-maxconnections=53']]
 
     def run_test(self):
         protected_peers = set()  # peers that we expect to be protected from eviction
@@ -65,7 +66,7 @@ class P2PEvict(BitcoinTestFramework):
             best_block = node.getbestblockhash()
             tip = int(best_block, 16)
             best_block_time = node.getblock(best_block)['time']
-            block = create_block(tip, create_coinbase(node.getblockcount() + 1), best_block_time + 1)
+            block = create_block(tip, height=node.getblockcount() + 1, ntime=best_block_time + 1)
             block.solve()
             block_peer.send_blocks_and_test([block], node, success=True)
             protected_peers.add(current_peer)
@@ -82,7 +83,7 @@ class P2PEvict(BitcoinTestFramework):
             txpeer.sync_with_ping()
 
             tx = self.wallet.create_self_transfer()['tx']
-            txpeer.send_message(msg_tx(tx))
+            txpeer.send_without_ping(msg_tx(tx))
             protected_peers.add(current_peer)
 
         self.log.info("Create 8 peers and protect them from eviction by having faster pings")
@@ -109,10 +110,11 @@ class P2PEvict(BitcoinTestFramework):
         # One of the non-protected peers must be evicted. We can't be sure which one because
         # 4 peers are protected via netgroup, which is identical for all peers,
         # and the eviction mechanism doesn't preserve the order of identical elements.
-        evicted_peers = []
-        for i in range(len(node.p2ps)):
-            if not node.p2ps[i].is_connected:
-                evicted_peers.append(i)
+        def get_evicted_peers():
+            return [i for i, peer in enumerate(node.p2ps) if not peer.is_connected]
+
+        self.wait_until(lambda: len(get_evicted_peers()) >= 1)  # wait for socket close
+        evicted_peers = get_evicted_peers()
 
         self.log.info("Test that one peer was evicted")
         self.log.debug("{} evicted peer: {}".format(len(evicted_peers), set(evicted_peers)))

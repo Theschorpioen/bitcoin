@@ -1,15 +1,20 @@
+// Copyright (c) 2024-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <compat/byteswap.h>
-#include <crypto/common.h> // For ReadBE32
-#include <logging.h>
+#include <crypto/common.h>
 #include <streams.h>
+#include <util/log.h>
 #include <util/translation.h>
 #include <wallet/migrate.h>
 
+#include <array>
+#include <cstddef>
 #include <optional>
+#include <stdexcept>
 #include <variant>
+#include <vector>
 
 namespace wallet {
 // Magic bytes in both endianness's
@@ -45,7 +50,7 @@ enum class RecordType : uint8_t {
     KEYDATA = 1,
     // DUPLICATE = 2,       Unused as our databases do not support duplicate records
     OVERFLOW_DATA = 3,
-    DELETE = 0x80, // Indicate this record is deleted. This is OR'd with the real type.
+    DELETE_FLAG = 0x80, // Indicate this record is deleted. This is OR'd with the real type.
 };
 
 enum class BTreeFlags : uint32_t {
@@ -203,8 +208,8 @@ class RecordHeader
 {
 public:
     uint16_t len;    // Key/data item length
-    RecordType type; // Page type (BDB has this include a DELETE FLAG that we track separately)
-    bool deleted;    // Whether the DELETE flag was set on type
+    RecordType type; // Page type (BDB has this; includes a DELETE_FLAG that we track separately)
+    bool deleted;    // Whether the DELETE_FLAG was set on type
 
     static constexpr size_t SIZE = 3; // The record header is 3 bytes
 
@@ -220,8 +225,8 @@ public:
 
         uint8_t uint8_type;
         s >> uint8_type;
-        type = static_cast<RecordType>(uint8_type & ~static_cast<uint8_t>(RecordType::DELETE));
-        deleted = uint8_type & static_cast<uint8_t>(RecordType::DELETE);
+        type = static_cast<RecordType>(uint8_type & ~static_cast<uint8_t>(RecordType::DELETE_FLAG));
+        deleted = uint8_type & static_cast<uint8_t>(RecordType::DELETE_FLAG);
 
         if (other_endian) {
             len = internal_bswap_16(len);
@@ -244,7 +249,7 @@ public:
     void Unserialize(Stream& s)
     {
         data.resize(m_header.len);
-        s.read(AsWritableBytes(Span(data.data(), data.size())));
+        s.read(std::as_writable_bytes(std::span(data.data(), data.size())));
     }
 };
 
@@ -272,7 +277,7 @@ public:
         s >> records;
 
         data.resize(m_header.len);
-        s.read(AsWritableBytes(Span(data.data(), data.size())));
+        s.read(std::as_writable_bytes(std::span(data.data(), data.size())));
 
         if (m_header.other_endian) {
             page_num = internal_bswap_32(page_num);
@@ -456,7 +461,7 @@ public:
     void Unserialize(Stream& s)
     {
         data.resize(m_header.hf_offset);
-        s.read(AsWritableBytes(Span(data.data(), data.size())));
+        s.read(std::as_writable_bytes(std::span(data.data(), data.size())));
     }
 };
 
@@ -539,8 +544,7 @@ void BerkeleyRODatabase::Open()
     page_size = outer_meta.pagesize;
 
     // Verify the size of the file is a multiple of the page size
-    db_file.seek(0, SEEK_END);
-    int64_t size = db_file.tell();
+    const int64_t size{db_file.size()};
 
     // Since BDB stores everything in a page, the file size should be a multiple of the page size;
     // However, BDB doesn't actually check that this is the case, and enforcing this check results
@@ -563,7 +567,7 @@ void BerkeleyRODatabase::Open()
 
     // Check all Log Sequence Numbers (LSN) point to file 0 and offset 1 which indicates that the LSNs were
     // reset and that the log files are not necessary to get all of the data in the database.
-    for (uint32_t i = 0; i < outer_meta.last_page; ++i) {
+    for (uint32_t i = 0; i <= outer_meta.last_page; ++i) {
         // The LSN is composed of 2 32-bit ints, the first is a file id, the second an offset
         // It will always be the first 8 bytes of a page, so we deserialize it directly for every page
         uint32_t file;
@@ -622,16 +626,24 @@ void BerkeleyRODatabase::Open()
     if (inner_meta.last_page > outer_meta.last_page) {
         throw std::runtime_error("Subdatabase last page is greater than database last page");
     }
+    uint64_t max_data_size = static_cast<uint64_t>(outer_meta.last_page) * page_size;
 
     // Make sure encryption is disabled
     if (inner_meta.encrypt_algo != 0) {
         throw std::runtime_error("BDB builtin encryption is not supported");
     }
 
+    // Read the root's level from its header
+    // Note that we will read the root page twice in order to process it.
+    SeekToPage(db_file, inner_meta.root, page_size);
+    PageHeader root_header(inner_meta.root, inner_meta.other_endian);
+    db_file >> root_header;
+
     // Do a DFS through the BTree, starting at root
-    std::vector<uint32_t> pages{inner_meta.root};
+    // We track the expected level of each page in order to avoid loops
+    std::vector<std::pair<uint32_t, uint32_t>> pages{{inner_meta.root, root_header.level}};
     while (pages.size() > 0) {
-        uint32_t curr_page = pages.back();
+        auto [curr_page, expected_level] = pages.back();
         // It turns out BDB completely ignores this last_page field and doesn't actually update it to the correct
         // last page. While we should be checking this, we can't.
         // This is left commented out as a reminder to not accidentally implement this in the future.
@@ -642,17 +654,23 @@ void BerkeleyRODatabase::Open()
         SeekToPage(db_file, curr_page, page_size);
         PageHeader header(curr_page, inner_meta.other_endian);
         db_file >> header;
+        if (header.level != expected_level) {
+            throw std::runtime_error("BTree page has an unexpected level");
+        }
         switch (header.type) {
         case PageType::BTREE_INTERNAL: {
             InternalPage int_page(header);
             db_file >> int_page;
             for (const InternalRecord& rec : int_page.records) {
                 if (rec.m_header.deleted) continue;
-                pages.push_back(rec.page_num);
+                pages.emplace_back(rec.page_num, header.level - 1);
             }
             break;
         }
         case PageType::BTREE_LEAF: {
+            if (header.level != 1) {
+                throw std::runtime_error("BTree Leaf page is not at level 1");
+            }
             RecordsPage rec_page(header);
             db_file >> rec_page;
             if (rec_page.records.size() % 2 != 0) {
@@ -669,6 +687,9 @@ void BerkeleyRODatabase::Open()
                 } else if (const OverflowRecord* orec = std::get_if<OverflowRecord>(&rec)) {
                     if (orec->m_header.deleted) continue;
                     uint32_t next_page = orec->page_number;
+                    if (orec->item_len > max_data_size) {
+                        throw std::runtime_error("Overflow record has an impossible length");
+                    }
                     while (next_page != 0) {
                         SeekToPage(db_file, next_page, page_size);
                         PageHeader opage_header(next_page, inner_meta.other_endian);
@@ -679,6 +700,9 @@ void BerkeleyRODatabase::Open()
                         OverflowPage opage(opage_header);
                         db_file >> opage;
                         data.insert(data.end(), opage.data.begin(), opage.data.end());
+                        if (data.size() > orec->item_len) {
+                            throw std::runtime_error("Overflow record data is larger than stated size");
+                        }
                         next_page = opage_header.next_page;
                     }
                 }
@@ -699,7 +723,7 @@ void BerkeleyRODatabase::Open()
     }
 }
 
-std::unique_ptr<DatabaseBatch> BerkeleyRODatabase::MakeBatch(bool flush_on_close)
+std::unique_ptr<DatabaseBatch> BerkeleyRODatabase::MakeBatch()
 {
     return std::make_unique<BerkeleyROBatch>(*this);
 }
@@ -714,15 +738,15 @@ bool BerkeleyRODatabase::Backup(const std::string& dest) const
     }
     try {
         if (fs::exists(dst) && fs::equivalent(src, dst)) {
-            LogPrintf("cannot backup to wallet source file %s\n", fs::PathToString(dst));
+            LogWarning("cannot backup to wallet source file %s", fs::PathToString(dst));
             return false;
         }
 
         fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
-        LogPrintf("copied %s to %s\n", fs::PathToString(m_filepath), fs::PathToString(dst));
+        LogInfo("copied %s to %s\n", fs::PathToString(m_filepath), fs::PathToString(dst));
         return true;
     } catch (const fs::filesystem_error& e) {
-        LogPrintf("error copying %s to %s - %s\n", fs::PathToString(m_filepath), fs::PathToString(dst), fsbridge::get_filesystem_error_message(e));
+        LogWarning("error copying %s to %s - %s\n", fs::PathToString(m_filepath), fs::PathToString(dst), e.code().message());
         return false;
     }
 }
@@ -736,17 +760,17 @@ bool BerkeleyROBatch::ReadKey(DataStream&& key, DataStream& value)
     }
     auto val = it->second;
     value.clear();
-    value.write(Span(val));
+    value.write(std::span(val));
     return true;
 }
 
 bool BerkeleyROBatch::HasKey(DataStream&& key)
 {
     SerializeData key_data{key.begin(), key.end()};
-    return m_database.m_records.count(key_data) > 0;
+    return m_database.m_records.contains(key_data);
 }
 
-BerkeleyROCursor::BerkeleyROCursor(const BerkeleyRODatabase& database, Span<const std::byte> prefix)
+BerkeleyROCursor::BerkeleyROCursor(const BerkeleyRODatabase& database, std::span<const std::byte> prefix)
     : m_database(database)
 {
     std::tie(m_cursor, m_cursor_end) = m_database.m_records.equal_range(BytePrefix{prefix});
@@ -757,13 +781,13 @@ DatabaseCursor::Status BerkeleyROCursor::Next(DataStream& ssKey, DataStream& ssV
     if (m_cursor == m_cursor_end) {
         return DatabaseCursor::Status::DONE;
     }
-    ssKey.write(Span(m_cursor->first));
-    ssValue.write(Span(m_cursor->second));
+    ssKey.write(std::span(m_cursor->first));
+    ssValue.write(std::span(m_cursor->second));
     m_cursor++;
     return DatabaseCursor::Status::MORE;
 }
 
-std::unique_ptr<DatabaseCursor> BerkeleyROBatch::GetNewPrefixCursor(Span<const std::byte> prefix)
+std::unique_ptr<DatabaseCursor> BerkeleyROBatch::GetNewPrefixCursor(std::span<const std::byte> prefix)
 {
     return std::make_unique<BerkeleyROCursor>(m_database, prefix);
 }

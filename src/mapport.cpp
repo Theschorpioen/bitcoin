@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2022 The Bitcoin Core developers
+// Copyright (c) 2011-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -8,11 +8,11 @@
 #include <common/netif.h>
 #include <common/pcp.h>
 #include <common/system.h>
-#include <logging.h>
 #include <net.h>
 #include <netaddress.h>
 #include <netbase.h>
 #include <random.h>
+#include <util/log.h>
 #include <util/thread.h>
 #include <util/threadinterrupt.h>
 
@@ -25,14 +25,12 @@
 
 static CThreadInterrupt g_mapport_interrupt;
 static std::thread g_mapport_thread;
-static std::atomic_uint g_mapport_enabled_protos{MapPortProtoFlag::NONE};
-static std::atomic<MapPortProtoFlag> g_mapport_current_proto{MapPortProtoFlag::NONE};
 
 using namespace std::chrono_literals;
 static constexpr auto PORT_MAPPING_REANNOUNCE_PERIOD{20min};
 static constexpr auto PORT_MAPPING_RETRY_PERIOD{5min};
 
-static bool ProcessPCP()
+static void ProcessPCP()
 {
     // The same nonce is used for all mappings, this is allowed by the spec, and simplifies keeping track of them.
     PCPMappingNonce pcp_nonce;
@@ -49,7 +47,7 @@ static bool ProcessPCP()
     // Local functor to handle result from PCP/NATPMP mapping.
     auto handle_mapping = [&](std::variant<MappingResult, MappingError> &res) -> void {
         if (MappingResult* mapping = std::get_if<MappingResult>(&res)) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Info, "portmap: Added mapping %s\n", mapping->ToString());
+            LogInfo("portmap: Added mapping %s", mapping->ToString());
             AddLocal(mapping->external, LOCAL_MAPPED);
             ret = true;
             actual_lifetime = std::min(actual_lifetime, mapping->lifetime);
@@ -69,18 +67,18 @@ static bool ProcessPCP()
         // IPv4
         std::optional<CNetAddr> gateway4 = QueryDefaultGateway(NET_IPV4);
         if (!gateway4) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "portmap: Could not determine IPv4 default gateway\n");
+            LogDebug(BCLog::NET, "portmap: Could not determine IPv4 default gateway\n");
         } else {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "portmap: gateway [IPv4]: %s\n", gateway4->ToStringAddr());
+            LogDebug(BCLog::NET, "portmap: gateway [IPv4]: %s\n", gateway4->ToStringAddr());
 
             // Open a port mapping on whatever local address we have toward the gateway.
             struct in_addr inaddr_any;
             inaddr_any.s_addr = htonl(INADDR_ANY);
-            auto res = PCPRequestPortMap(pcp_nonce, *gateway4, CNetAddr(inaddr_any), private_port, requested_lifetime);
+            auto res = PCPRequestPortMap(pcp_nonce, *gateway4, CNetAddr(inaddr_any), private_port, requested_lifetime, g_mapport_interrupt);
             MappingError* pcp_err = std::get_if<MappingError>(&res);
             if (pcp_err && *pcp_err == MappingError::UNSUPP_VERSION) {
-                LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "portmap: Got unsupported PCP version response, falling back to NAT-PMP\n");
-                res = NATPMPRequestPortMap(*gateway4, private_port, requested_lifetime);
+                LogDebug(BCLog::NET, "portmap: Got unsupported PCP version response, falling back to NAT-PMP\n");
+                res = NATPMPRequestPortMap(*gateway4, private_port, requested_lifetime, g_mapport_interrupt);
             }
             handle_mapping(res);
         }
@@ -88,27 +86,27 @@ static bool ProcessPCP()
         // IPv6
         std::optional<CNetAddr> gateway6 = QueryDefaultGateway(NET_IPV6);
         if (!gateway6) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "portmap: Could not determine IPv6 default gateway\n");
+            LogDebug(BCLog::NET, "portmap: Could not determine IPv6 default gateway\n");
         } else {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "portmap: gateway [IPv6]: %s\n", gateway6->ToStringAddr());
+            LogDebug(BCLog::NET, "portmap: gateway [IPv6]: %s\n", gateway6->ToStringAddr());
 
             // Try to open pinholes for all routable local IPv6 addresses.
             for (const auto &addr: GetLocalAddresses()) {
                 if (!addr.IsRoutable() || !addr.IsIPv6()) continue;
-                auto res = PCPRequestPortMap(pcp_nonce, *gateway6, addr, private_port, requested_lifetime);
+                auto res = PCPRequestPortMap(pcp_nonce, *gateway6, addr, private_port, requested_lifetime, g_mapport_interrupt);
                 handle_mapping(res);
             }
         }
 
         // Log message if we got NO_RESOURCES.
         if (no_resources) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Warning, "portmap: At least one mapping failed because of a NO_RESOURCES error. This usually indicates that the port is already used on the router. If this is the only instance of bitcoin running on the network, this will resolve itself automatically. Otherwise, you might want to choose a different P2P port to prevent this conflict.\n");
+            LogWarning("portmap: At least one mapping failed because of a NO_RESOURCES error. This usually indicates that the port is already used on the router. If this is the only instance of bitcoin running on the network, this will resolve itself automatically. Otherwise, you might want to choose a different P2P port to prevent this conflict.\n");
         }
 
         // Sanity-check returned lifetime.
         if (actual_lifetime < 30) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Warning, "portmap: Got impossibly short mapping lifetime of %d seconds\n", actual_lifetime);
-            return false;
+            LogWarning("portmap: Got impossibly short mapping lifetime of %d seconds\n", actual_lifetime);
+            return;
         }
         // RFC6887 11.2.1 recommends that clients send their first renewal packet at a time chosen with uniform random
         // distribution in the range 1/2 to 5/8 of expiration time.
@@ -119,28 +117,14 @@ static bool ProcessPCP()
 
     // We don't delete the mappings when the thread is interrupted because this would add additional complexity, so
     // we rather just choose a fairly short expiry time.
-
-    return ret;
 }
 
+/// \anchor mapport
 static void ThreadMapPort()
 {
-    bool ok;
     do {
-        ok = false;
-
-        if (g_mapport_enabled_protos & MapPortProtoFlag::PCP) {
-            g_mapport_current_proto = MapPortProtoFlag::PCP;
-            ok = ProcessPCP();
-            if (ok) continue;
-        }
-
-        g_mapport_current_proto = MapPortProtoFlag::NONE;
-        if (g_mapport_enabled_protos == MapPortProtoFlag::NONE) {
-            return;
-        }
-
-    } while (ok || g_mapport_interrupt.sleep_for(PORT_MAPPING_RETRY_PERIOD));
+        ProcessPCP();
+    } while (g_mapport_interrupt.sleep_for(PORT_MAPPING_RETRY_PERIOD));
 }
 
 void StartThreadMapPort()
@@ -151,46 +135,18 @@ void StartThreadMapPort()
     }
 }
 
-static void DispatchMapPort()
+void StartMapPort(bool enable)
 {
-    if (g_mapport_current_proto == MapPortProtoFlag::NONE && g_mapport_enabled_protos == MapPortProtoFlag::NONE) {
-        return;
-    }
-
-    if (g_mapport_current_proto == MapPortProtoFlag::NONE && g_mapport_enabled_protos != MapPortProtoFlag::NONE) {
+    if (enable) {
         StartThreadMapPort();
-        return;
-    }
-
-    if (g_mapport_current_proto != MapPortProtoFlag::NONE && g_mapport_enabled_protos == MapPortProtoFlag::NONE) {
+    } else {
         InterruptMapPort();
         StopMapPort();
-        return;
     }
-
-    if (g_mapport_enabled_protos & g_mapport_current_proto) {
-        return;
-    }
-}
-
-static void MapPortProtoSetEnabled(MapPortProtoFlag proto, bool enabled)
-{
-    if (enabled) {
-        g_mapport_enabled_protos |= proto;
-    } else {
-        g_mapport_enabled_protos &= ~proto;
-    }
-}
-
-void StartMapPort(bool use_pcp)
-{
-    MapPortProtoSetEnabled(MapPortProtoFlag::PCP, use_pcp);
-    DispatchMapPort();
 }
 
 void InterruptMapPort()
 {
-    g_mapport_enabled_protos = MapPortProtoFlag::NONE;
     if (g_mapport_thread.joinable()) {
         g_mapport_interrupt();
     }

@@ -1,4 +1,4 @@
-// Copyright (c) 2009-2022 The Bitcoin Core developers
+// Copyright (c) 2009-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -8,11 +8,13 @@
 #include <clientversion.h>
 #include <coins.h>
 #include <common/args.h>
+#include <common/license_info.h>
 #include <common/system.h>
 #include <compat/compat.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <core_io.h>
+#include <crypto/sha256.h>
 #include <key_io.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
@@ -211,35 +213,33 @@ static CAmount ExtractAndValidateValue(const std::string& strValue)
 
 static void MutateTxVersion(CMutableTransaction& tx, const std::string& cmdVal)
 {
-    uint32_t newVersion;
-    if (!ParseUInt32(cmdVal, &newVersion) || newVersion < 1 || newVersion > TX_MAX_STANDARD_VERSION) {
+    const auto ver{ToIntegral<uint32_t>(cmdVal)};
+    if (!ver || *ver < 1 || *ver > TX_MAX_STANDARD_VERSION) {
         throw std::runtime_error("Invalid TX version requested: '" + cmdVal + "'");
     }
-
-    tx.version = newVersion;
+    tx.version = *ver;
 }
 
 static void MutateTxLocktime(CMutableTransaction& tx, const std::string& cmdVal)
 {
-    int64_t newLocktime;
-    if (!ParseInt64(cmdVal, &newLocktime) || newLocktime < 0LL || newLocktime > 0xffffffffLL)
+    const auto locktime{ToIntegral<uint32_t>(cmdVal)};
+    if (!locktime) {
         throw std::runtime_error("Invalid TX locktime requested: '" + cmdVal + "'");
-
-    tx.nLockTime = (unsigned int) newLocktime;
+    }
+    tx.nLockTime = *locktime;
 }
 
 static void MutateTxRBFOptIn(CMutableTransaction& tx, const std::string& strInIdx)
 {
-    // parse requested index
-    int64_t inIdx = -1;
-    if (strInIdx != "" && (!ParseInt64(strInIdx, &inIdx) || inIdx < 0 || inIdx >= static_cast<int64_t>(tx.vin.size()))) {
+    const auto idx{ToIntegral<uint32_t>(strInIdx)};
+    if (strInIdx != "" && (!idx || *idx >= tx.vin.size())) {
         throw std::runtime_error("Invalid TX input index '" + strInIdx + "'");
     }
 
     // set the nSequence to MAX_INT - 2 (= RBF opt in flag)
-    int cnt = 0;
+    uint32_t cnt{0};
     for (CTxIn& txin : tx.vin) {
-        if (strInIdx == "" || cnt == inIdx) {
+        if (strInIdx == "" || cnt == *idx) {
             if (txin.nSequence > MAX_BIP125_RBF_SEQUENCE) {
                 txin.nSequence = MAX_BIP125_RBF_SEQUENCE;
             }
@@ -277,9 +277,10 @@ static void MutateTxAddInput(CMutableTransaction& tx, const std::string& strInpu
 
     // extract and validate vout
     const std::string& strVout = vStrInputParts[1];
-    int64_t vout;
-    if (!ParseInt64(strVout, &vout) || vout < 0 || vout > static_cast<int64_t>(maxVout))
+    const auto vout{ToIntegral<uint32_t>(strVout)};
+    if (!vout || *vout > maxVout) {
         throw std::runtime_error("invalid TX input vout '" + strVout + "'");
+    }
 
     // extract the optional sequence number
     uint32_t nSequenceIn = CTxIn::SEQUENCE_FINAL;
@@ -288,7 +289,7 @@ static void MutateTxAddInput(CMutableTransaction& tx, const std::string& strInpu
     }
 
     // append to transaction input list
-    CTxIn txin(*txid, vout, CScript(), nSequenceIn);
+    CTxIn txin{*txid, *vout, CScript{}, nSequenceIn};
     tx.vin.push_back(txin);
 }
 
@@ -508,26 +509,20 @@ static void MutateTxAddOutScript(CMutableTransaction& tx, const std::string& str
 
 static void MutateTxDelInput(CMutableTransaction& tx, const std::string& strInIdx)
 {
-    // parse requested deletion index
-    int64_t inIdx;
-    if (!ParseInt64(strInIdx, &inIdx) || inIdx < 0 || inIdx >= static_cast<int64_t>(tx.vin.size())) {
+    const auto idx{ToIntegral<uint32_t>(strInIdx)};
+    if (!idx || idx >= tx.vin.size()) {
         throw std::runtime_error("Invalid TX input index '" + strInIdx + "'");
     }
-
-    // delete input from transaction
-    tx.vin.erase(tx.vin.begin() + inIdx);
+    tx.vin.erase(tx.vin.begin() + *idx);
 }
 
 static void MutateTxDelOutput(CMutableTransaction& tx, const std::string& strOutIdx)
 {
-    // parse requested deletion index
-    int64_t outIdx;
-    if (!ParseInt64(strOutIdx, &outIdx) || outIdx < 0 || outIdx >= static_cast<int64_t>(tx.vout.size())) {
+    const auto idx{ToIntegral<uint32_t>(strOutIdx)};
+    if (!idx || idx >= tx.vout.size()) {
         throw std::runtime_error("Invalid TX output index '" + strOutIdx + "'");
     }
-
-    // delete output from transaction
-    tx.vout.erase(tx.vout.begin() + outIdx);
+    tx.vout.erase(tx.vout.begin() + *idx);
 }
 
 static const unsigned int N_SIGHASH_OPTS = 7;
@@ -562,7 +557,7 @@ static CAmount AmountFromValue(const UniValue& value)
 {
     if (!value.isNum() && !value.isStr())
         throw std::runtime_error("Amount is not a number or string");
-    CAmount amount;
+    int64_t amount;
     if (!ParseFixedPoint(value.getValStr(), 8, &amount))
         throw std::runtime_error("Invalid amount");
     if (!MoneyRange(amount))
@@ -592,10 +587,9 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
     // starts as a clone of the raw tx:
     CMutableTransaction mergedTx{tx};
     const CMutableTransaction txv{tx};
-    CCoinsView viewDummy;
-    CCoinsViewCache view(&viewDummy);
+    CCoinsViewCache view{&CoinsViewEmpty::Get()};
 
-    if (!registers.count("privatekeys"))
+    if (!registers.contains("privatekeys"))
         throw std::runtime_error("privatekeys register variable must be set.");
     FillableSigningProvider tempKeystore;
     UniValue keysObj = registers["privatekeys"];
@@ -611,7 +605,7 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
     }
 
     // Add previous txouts given in the RPC call:
-    if (!registers.count("prevtxs"))
+    if (!registers.contains("prevtxs"))
         throw std::runtime_error("prevtxs register variable must be set.");
     UniValue prevtxsObj = registers["prevtxs"];
     {
@@ -666,7 +660,9 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
                 UniValue v = prevOut["redeemScript"];
                 std::vector<unsigned char> rsData(ParseHexUV(v, "redeemScript"));
                 CScript redeemScript(rsData.begin(), rsData.end());
-                tempKeystore.AddCScript(redeemScript);
+                if (!tempKeystore.AddCScript(redeemScript)) {
+                    throw std::runtime_error(strprintf("Error adding redeemscript=%s", HexStr(redeemScript)));
+                }
             }
         }
     }
@@ -688,7 +684,7 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
         SignatureData sigdata = DataFromTransaction(mergedTx, i, coin.out);
         // Only sign SIGHASH_SINGLE if there's a corresponding output:
         if (!fHashSingle || (i < mergedTx.vout.size()))
-            ProduceSignature(keystore, MutableTransactionSignatureCreator(mergedTx, i, amount, nHashType), prevPubKey, sigdata);
+            ProduceSignature(keystore, MutableTransactionSignatureCreator(mergedTx, i, amount, {.sighash_type = nHashType}), prevPubKey, sigdata);
 
         if (amount == MAX_MONEY && !sigdata.scriptWitness.IsNull()) {
             throw std::runtime_error(strprintf("Missing amount for CTxOut with scriptPubKey=%s", HexStr(prevPubKey)));
@@ -865,6 +861,7 @@ static int CommandLineRawTx(int argc, char* argv[])
 MAIN_FUNCTION
 {
     SetupEnvironment();
+    SHA256AutoDetect();
 
     try {
         int ret = AppInitRawTx(argc, argv);

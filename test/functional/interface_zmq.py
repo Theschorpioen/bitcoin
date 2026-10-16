@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2015-2022 The Bitcoin Core developers
+# Copyright (c) 2015-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the ZMQ notification interface."""
@@ -15,7 +15,6 @@ from test_framework.address import (
 from test_framework.blocktools import (
     add_witness_commitment,
     create_block,
-    create_coinbase,
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.messages import (
@@ -75,9 +74,9 @@ class ZMQSubscriber:
         label = chr(body[32])
         mempool_sequence = None if len(body) != 32+1+8 else struct.unpack("<Q", body[32+1:])[0]
         if mempool_sequence is not None:
-            assert label == "A" or label == "R"
+            assert label in ("A", "R")
         else:
-            assert label == "D" or label == "C"
+            assert label in ("D", "C")
         return (hash, label, mempool_sequence)
 
 
@@ -174,7 +173,7 @@ class ZMQTest (BitcoinTestFramework):
 
         # set subscriber's desired timeout for the test
         for sub in subscribers:
-            sub.socket.set(zmq.RCVTIMEO, recv_timeout*1000)
+            sub.socket.set(zmq.RCVTIMEO, int(recv_timeout * self.options.timeout_factor * 1000))
 
         self.connect_nodes(0, 1)
         if sync_blocks:
@@ -212,15 +211,14 @@ class ZMQTest (BitcoinTestFramework):
 
             # Should receive the coinbase raw transaction.
             tx = tx_from_hex(rawtx.receive().hex())
-            tx.calc_sha256()
-            assert_equal(tx.hash, txid.hex())
+            assert_equal(tx.txid_hex, txid.hex())
 
             # Should receive the generated raw block.
             hex = rawblock.receive()
             block = CBlock()
             block.deserialize(BytesIO(hex))
             assert block.is_valid()
-            assert_equal(block.vtx[0].hash, tx.hash)
+            assert_equal(block.vtx[0].txid_hex, tx.txid_hex)
             assert_equal(len(block.vtx), 1)
             assert_equal(genhashes[x], hash256_reversed(hex[:80]).hex())
 
@@ -420,12 +418,12 @@ class ZMQTest (BitcoinTestFramework):
         bump_txid = self.nodes[0].sendrawtransaction(orig_tx['tx'].serialize().hex())
         # Mine the pre-bump tx
         txs_to_add = [orig_tx['hex']] + [tx['hex'] for tx in more_tx]
-        block = create_block(int(self.nodes[0].getbestblockhash(), 16), create_coinbase(self.nodes[0].getblockcount()+1), txlist=txs_to_add)
+        block = create_block(int(self.nodes[0].getbestblockhash(), 16), height=self.nodes[0].getblockcount() + 1, txlist=txs_to_add)
         add_witness_commitment(block)
         block.solve()
         assert_equal(self.nodes[0].submitblock(block.serialize().hex()), None)
         tip = self.nodes[0].getbestblockhash()
-        assert_equal(int(tip, 16), block.sha256)
+        assert_equal(int(tip, 16), block.hash_int)
         orig_txid_2 = self.wallet.send_self_transfer(from_node=self.nodes[0])['txid']
 
         # Flush old notifications until evicted tx original entry
@@ -481,7 +479,7 @@ class ZMQTest (BitcoinTestFramework):
         while zmq_mem_seq is None:
             (hash_str, label, zmq_mem_seq) = seq.receive_sequence()
 
-        assert label == "A" or label == "R"
+        assert label in ("A", "R")
         assert hash_str is not None
 
         # 2) We need to "seed" our view of the mempool

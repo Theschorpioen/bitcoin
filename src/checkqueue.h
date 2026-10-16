@@ -1,13 +1,13 @@
-// Copyright (c) 2012-2022 The Bitcoin Core developers
+// Copyright (c) 2012-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_CHECKQUEUE_H
 #define BITCOIN_CHECKQUEUE_H
 
-#include <logging.h>
 #include <sync.h>
 #include <tinyformat.h>
+#include <util/log.h>
 #include <util/threadnames.h>
 
 #include <algorithm>
@@ -68,6 +68,7 @@ private:
     std::vector<std::thread> m_worker_threads;
     bool m_request_stop GUARDED_BY(m_mutex){false};
 
+    /// \anchor checkqueue
     /** Internal function that does bulk of the verification work. If fMaster, return the final result. */
     std::optional<R> Loop(bool fMaster) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
@@ -148,7 +149,7 @@ public:
         m_worker_threads.reserve(worker_threads_num);
         for (int n = 0; n < worker_threads_num; ++n) {
             m_worker_threads.emplace_back([this, n]() {
-                util::ThreadRename(strprintf("scriptch.%i", n));
+                util::ThreadRename(strprintf("scriptch.%02i", n));
                 Loop(false /* worker thread */);
             });
         }
@@ -205,46 +206,35 @@ public:
  * queue is finished before continuing.
  */
 template <typename T, typename R = std::remove_cvref_t<decltype(std::declval<T>()().value())>>
-class CCheckQueueControl
+class SCOPED_LOCKABLE CCheckQueueControl
 {
 private:
-    CCheckQueue<T, R> * const pqueue;
+    CCheckQueue<T, R>& m_queue;
+    UniqueLock<Mutex> m_lock;
     bool fDone;
 
 public:
     CCheckQueueControl() = delete;
     CCheckQueueControl(const CCheckQueueControl&) = delete;
     CCheckQueueControl& operator=(const CCheckQueueControl&) = delete;
-    explicit CCheckQueueControl(CCheckQueue<T> * const pqueueIn) : pqueue(pqueueIn), fDone(false)
-    {
-        // passed queue is supposed to be unused, or nullptr
-        if (pqueue != nullptr) {
-            ENTER_CRITICAL_SECTION(pqueue->m_control_mutex);
-        }
-    }
+    explicit CCheckQueueControl(CCheckQueue<T>& queueIn) EXCLUSIVE_LOCK_FUNCTION(queueIn.m_control_mutex) : m_queue(queueIn), m_lock(LOCK_ARGS(queueIn.m_control_mutex)), fDone(false) {}
 
     std::optional<R> Complete()
     {
-        if (pqueue == nullptr) return std::nullopt;
-        auto ret = pqueue->Complete();
+        auto ret = m_queue.Complete();
         fDone = true;
         return ret;
     }
 
     void Add(std::vector<T>&& vChecks)
     {
-        if (pqueue != nullptr) {
-            pqueue->Add(std::move(vChecks));
-        }
+        m_queue.Add(std::move(vChecks));
     }
 
-    ~CCheckQueueControl()
+    ~CCheckQueueControl() UNLOCK_FUNCTION()
     {
         if (!fDone)
             Complete();
-        if (pqueue != nullptr) {
-            LEAVE_CRITICAL_SECTION(pqueue->m_control_mutex);
-        }
     }
 };
 

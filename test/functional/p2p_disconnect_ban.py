@@ -15,7 +15,6 @@ from test_framework.util import (
 class DisconnectBanTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
-        self.supports_cli = False
 
     def run_test(self):
         self.log.info("Connect nodes both ways")
@@ -133,18 +132,18 @@ class DisconnectBanTest(BitcoinTestFramework):
         address1 = self.nodes[0].getpeerinfo()[0]['addr']
         self.nodes[0].disconnectnode(address=address1)
         self.wait_until(lambda: len(self.nodes[1].getpeerinfo()) == 1, timeout=10)
-        assert not [node for node in self.nodes[0].getpeerinfo() if node['addr'] == address1]
+        assert address1 not in [node['addr'] for node in self.nodes[0].getpeerinfo()]
 
         self.log.info("disconnectnode: successfully reconnect node")
         self.connect_nodes(0, 1)  # reconnect the node
         assert_equal(len(self.nodes[0].getpeerinfo()), 2)
-        assert [node for node in self.nodes[0].getpeerinfo() if node['addr'] == address1]
+        assert address1 in [node['addr'] for node in self.nodes[0].getpeerinfo()]
 
         self.log.info("disconnectnode: successfully disconnect node by node id")
         id1 = self.nodes[0].getpeerinfo()[0]['id']
         self.nodes[0].disconnectnode(nodeid=id1)
         self.wait_until(lambda: len(self.nodes[1].getpeerinfo()) == 1, timeout=10)
-        assert not [node for node in self.nodes[0].getpeerinfo() if node['id'] == id1]
+        assert id1 not in [node['id'] for node in self.nodes[0].getpeerinfo()]
 
 if __name__ == '__main__':
     DisconnectBanTest(__file__).main()

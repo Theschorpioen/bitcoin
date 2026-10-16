@@ -3,14 +3,16 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <util/feefrac.h>
-#include <algorithm>
-#include <array>
-#include <vector>
 
-std::partial_ordering CompareChunks(Span<const FeeFrac> chunks0, Span<const FeeFrac> chunks1)
+#include <util/check.h>
+
+#include <array>
+#include <cstddef>
+
+std::partial_ordering CompareChunks(std::span<const FeeFrac> chunks0, std::span<const FeeFrac> chunks1)
 {
     /** Array to allow indexed access to input diagrams. */
-    const std::array<Span<const FeeFrac>, 2> chunk = {chunks0, chunks1};
+    const std::array<std::span<const FeeFrac>, 2> chunk = {chunks0, chunks1};
     /** How many elements we have processed in each input. */
     size_t next_index[2] = {0, 0};
     /** Accumulated fee/sizes in diagrams, up to next_index[i] - 1. */
@@ -42,17 +44,17 @@ std::partial_ordering CompareChunks(Span<const FeeFrac> chunks0, Span<const FeeF
 
         const auto slope_ap = point_p - point_a;
         Assume(slope_ap.size > 0);
-        std::weak_ordering cmp = std::weak_ordering::equivalent;
+        auto cmp = std::strong_ordering::equivalent;
         if (done_0 || done_1) {
             // If a single side has no points left, act as if AB has slope tail_feerate(of 0).
             Assume(!(done_0 && done_1));
-            cmp = FeeRateCompare(slope_ap, FeeFrac(0, 1));
+            cmp = ByRatio{slope_ap} <=> ByRatio{FeeFrac(0, 1)};
         } else {
             // If both sides have points left, compute B, and the slope of AB explicitly.
             const FeeFrac& point_b = next_point(!unproc_side);
             const auto slope_ab = point_b - point_a;
             Assume(slope_ab.size >= slope_ap.size);
-            cmp = FeeRateCompare(slope_ap, slope_ab);
+            cmp = ByRatio{slope_ap} <=> ByRatio{slope_ab};
 
             // If B and P have the same size, B can be marked as processed (in addition to P, see
             // below), as we've already performed a comparison at this size.

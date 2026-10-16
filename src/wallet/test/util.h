@@ -1,17 +1,20 @@
-// Copyright (c) 2021-2022 The Bitcoin Core developers
+// Copyright (c) 2021-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_WALLET_TEST_UTIL_H
 #define BITCOIN_WALLET_TEST_UTIL_H
 
-#include <bitcoin-build-config.h> // IWYU pragma: keep
-
 #include <addresstype.h>
+#include <streams.h>
 #include <wallet/db.h>
 #include <wallet/scriptpubkeyman.h>
+#include <wallet/sqlite.h>
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 
 class ArgsManager;
 class CChain;
@@ -26,25 +29,21 @@ class CWallet;
 class WalletDatabase;
 struct WalletContext;
 
-static const DatabaseFormat DATABASE_FORMATS[] = {
-#ifdef USE_SQLITE
+inline constexpr DatabaseFormat DATABASE_FORMATS[] = {
        DatabaseFormat::SQLITE,
-#endif
-#ifdef USE_BDB
-       DatabaseFormat::BERKELEY,
-#endif
 };
 
-const std::string ADDRESS_BCRT1_UNSPENDABLE = "bcrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3xueyj";
+inline const std::string ADDRESS_BCRT1_UNSPENDABLE = "bcrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3xueyj";
 
 std::unique_ptr<CWallet> CreateSyncedWallet(interfaces::Chain& chain, CChain& cchain, const CKey& key);
 
-std::shared_ptr<CWallet> TestLoadWallet(WalletContext& context);
-std::shared_ptr<CWallet> TestLoadWallet(std::unique_ptr<WalletDatabase> database, WalletContext& context, uint64_t create_flags);
-void TestUnloadWallet(std::shared_ptr<CWallet>&& wallet);
+void AddKey(CWallet& wallet, const CKey& key);
 
-// Creates a copy of the provided database
-std::unique_ptr<WalletDatabase> DuplicateMockDatabase(WalletDatabase& database);
+std::shared_ptr<CWallet> TestCreateWallet(WalletContext& context);
+std::shared_ptr<CWallet> TestCreateWallet(std::unique_ptr<WalletDatabase> database, WalletContext& context, uint64_t create_flags);
+std::shared_ptr<CWallet> TestLoadWallet(WalletContext& context);
+std::shared_ptr<CWallet> TestLoadWallet(std::unique_ptr<WalletDatabase> database, WalletContext& context);
+void TestUnloadWallet(std::shared_ptr<CWallet>&& wallet);
 
 /** Returns a new encoded destination from the wallet (hardcoded to BECH32) */
 std::string getnewaddress(CWallet& w);
@@ -53,84 +52,108 @@ CTxDestination getNewDestination(CWallet& w, OutputType output_type);
 
 using MockableData = std::map<SerializeData, SerializeData, std::less<>>;
 
-class MockableCursor: public DatabaseCursor
+
+class MockableSQLiteBatch : public SQLiteBatch
 {
 public:
-    MockableData::const_iterator m_cursor;
-    MockableData::const_iterator m_cursor_end;
-    bool m_pass;
-
-    explicit MockableCursor(const MockableData& records, bool pass) : m_cursor(records.begin()), m_cursor_end(records.end()), m_pass(pass) {}
-    MockableCursor(const MockableData& records, bool pass, Span<const std::byte> prefix);
-    ~MockableCursor() = default;
-
-    Status Next(DataStream& key, DataStream& value) override;
-};
-
-class MockableBatch : public DatabaseBatch
-{
-private:
-    MockableData& m_records;
-    bool m_pass;
-
-    bool ReadKey(DataStream&& key, DataStream& value) override;
-    bool WriteKey(DataStream&& key, DataStream&& value, bool overwrite=true) override;
-    bool EraseKey(DataStream&& key) override;
-    bool HasKey(DataStream&& key) override;
-    bool ErasePrefix(Span<const std::byte> prefix) override;
-
-public:
-    explicit MockableBatch(MockableData& records, bool pass) : m_records(records), m_pass(pass) {}
-    ~MockableBatch() = default;
-
-    void Flush() override {}
-    void Close() override {}
-
-    std::unique_ptr<DatabaseCursor> GetNewCursor() override
-    {
-        return std::make_unique<MockableCursor>(m_records, m_pass);
-    }
-    std::unique_ptr<DatabaseCursor> GetNewPrefixCursor(Span<const std::byte> prefix) override {
-        return std::make_unique<MockableCursor>(m_records, m_pass, prefix);
-    }
-    bool TxnBegin() override { return m_pass; }
-    bool TxnCommit() override { return m_pass; }
-    bool TxnAbort() override { return m_pass; }
-    bool HasActiveTxn() override { return false; }
+    using SQLiteBatch::SQLiteBatch;
+    using SQLiteBatch::WriteKey;
 };
 
 /** A WalletDatabase whose contents and return values can be modified as needed for testing
  **/
-class MockableDatabase : public WalletDatabase
+class MockableSQLiteDatabase : public InMemoryWalletDatabase
 {
 public:
-    MockableData m_records;
-    bool m_pass{true};
+    MockableSQLiteDatabase();
 
-    MockableDatabase(MockableData records = {}) : WalletDatabase(), m_records(records) {}
-    ~MockableDatabase() = default;
-
-    void Open() override {}
-    void AddRef() override {}
-    void RemoveRef() override {}
-
-    bool Rewrite(const char* pszSkip=nullptr) override { return m_pass; }
-    bool Backup(const std::string& strDest) const override { return m_pass; }
-    void Flush() override {}
-    void Close() override {}
-    bool PeriodicFlush() override { return m_pass; }
-    void IncrementUpdateCounter() override {}
-    void ReloadDbEnv() override {}
+    bool Backup(const std::string& strDest) const override { return true; }
 
     std::string Filename() override { return "mockable"; }
-    std::string Format() override { return "mock"; }
-    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<MockableBatch>(m_records, m_pass); }
+    std::string Format() override { return "sqlite-mock"; }
+    std::unique_ptr<DatabaseBatch> MakeBatch() override { return std::make_unique<MockableSQLiteBatch>(*this); }
 };
 
-std::unique_ptr<WalletDatabase> CreateMockableWalletDatabase(MockableData records = {});
-MockableDatabase& GetMockableDatabase(CWallet& wallet);
+/** A SQLite wallet database that can fail selected operations for testing */
+class FaultInjectingDatabase : public MockableSQLiteDatabase
+{
+public:
+    void FailNextWrite(std::string record_type, size_t match_skip_count = 0)
+    {
+        m_fail_write = {std::move(record_type), match_skip_count};
+    }
+    void FailNextErase(std::string record_type) { m_fail_erase = {std::move(record_type)}; }
+    void FailNextCommit() { m_fail_commit = true; }
 
-ScriptPubKeyMan* CreateDescriptor(CWallet& keystore, const std::string& desc_str, const bool success);
+    std::optional<SerializeData> GetRecordValue(const std::string& record_type)
+    {
+        auto batch{MakeBatch()};
+        if (auto cursor{batch->GetNewPrefixCursor(DataStream() << record_type)}) {
+            DataStream key, value;
+            if (cursor->Next(key, value) == DatabaseCursor::Status::MORE) {
+                return SerializeData{value.begin(), value.end()};
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool HasRecordType(const std::string& record_type) { return GetRecordValue(record_type).has_value(); }
+
+    std::unique_ptr<DatabaseBatch> MakeBatch() override { return std::make_unique<Batch>(*this); }
+
+private:
+    struct Failure {
+        std::string record_type;
+        size_t match_skip_count{0};
+    };
+
+    static bool ShouldFail(std::optional<Failure>& failure, const DataStream& key)
+    {
+        if (!failure) return false;
+        std::string record_type;
+        SpanReader{MakeByteSpan(key)} >> record_type;
+        if (failure->record_type != record_type) return false;
+        if (failure->match_skip_count > 0) {
+            --failure->match_skip_count;
+            return false;
+        }
+        failure.reset();
+        return true;
+    }
+
+    struct Batch : SQLiteBatch {
+        explicit Batch(FaultInjectingDatabase& database) : SQLiteBatch(database), m_owner{database} {}
+
+        bool TxnCommit() override
+        {
+            if (std::exchange(m_owner.m_fail_commit, false)) return false;
+            return SQLiteBatch::TxnCommit();
+        }
+
+        bool WriteKey(DataStream&& key, DataStream&& value, bool overwrite = true) override
+        {
+            if (ShouldFail(m_owner.m_fail_write, key)) return false;
+            return SQLiteBatch::WriteKey(std::move(key), std::move(value), overwrite);
+        }
+
+        bool EraseKey(DataStream&& key) override
+        {
+            if (ShouldFail(m_owner.m_fail_erase, key)) return false;
+            return SQLiteBatch::EraseKey(std::move(key));
+        }
+
+        FaultInjectingDatabase& m_owner;
+    };
+
+    std::optional<Failure> m_fail_write;
+    std::optional<Failure> m_fail_erase;
+    bool m_fail_commit{false};
+};
+
+std::unique_ptr<WalletDatabase> CreateMockableWalletDatabase();
+MockableSQLiteDatabase& GetMockableDatabase(CWallet& wallet);
+
+DescriptorScriptPubKeyMan* CreateDescriptor(CWallet& keystore, const std::string& desc_str, bool success);
 } // namespace wallet
 
 #endif // BITCOIN_WALLET_TEST_UTIL_H

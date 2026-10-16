@@ -14,7 +14,7 @@ import random
 import unittest
 
 from test_framework.crypto import secp256k1
-from test_framework.util import random_bitflip
+from test_framework.util import assert_equal, assert_not_equal, random_bitflip
 
 # Point with no known discrete log.
 H_POINT = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"
@@ -65,11 +65,11 @@ class ECPubKey:
 
         # Extract r and s from the DER formatted signature. Return false for
         # any DER encoding errors.
-        if (sig[1] + 2 != len(sig)):
-            return False
         if (len(sig) < 4):
             return False
         if (sig[0] != 0x30):
+            return False
+        if (sig[1] + 2 != len(sig)):
             return False
         if (sig[2] != 0x02):
             return False
@@ -132,7 +132,7 @@ class ECKey:
 
     def set(self, secret, compressed):
         """Construct a private key object with given 32-byte secret and compressed flag."""
-        assert len(secret) == 32
+        assert_equal(len(secret), 32)
         secret = int.from_bytes(secret, 'big')
         self.valid = (secret > 0 and secret < ORDER)
         if self.valid:
@@ -194,7 +194,7 @@ def compute_xonly_pubkey(key):
     This also returns whether the resulting public key was negated.
     """
 
-    assert len(key) == 32
+    assert_equal(len(key), 32)
     x = int.from_bytes(key, 'big')
     if x == 0 or x >= ORDER:
         return (None, None)
@@ -204,8 +204,8 @@ def compute_xonly_pubkey(key):
 def tweak_add_privkey(key, tweak):
     """Tweak a private key (after negating it if needed)."""
 
-    assert len(key) == 32
-    assert len(tweak) == 32
+    assert_equal(len(key), 32)
+    assert_equal(len(tweak), 32)
 
     x = int.from_bytes(key, 'big')
     if x == 0 or x >= ORDER:
@@ -223,8 +223,8 @@ def tweak_add_privkey(key, tweak):
 def tweak_add_pubkey(key, tweak):
     """Tweak a public key and return whether the result had to be negated."""
 
-    assert len(key) == 32
-    assert len(tweak) == 32
+    assert_equal(len(key), 32)
+    assert_equal(len(tweak), 32)
 
     P = secp256k1.GE.from_bytes_xonly(key)
     if P is None:
@@ -242,11 +242,10 @@ def verify_schnorr(key, sig, msg):
 
     - key is a 32-byte xonly pubkey (computed using compute_xonly_pubkey).
     - sig is a 64-byte Schnorr signature
-    - msg is a 32-byte message
+    - msg is a variable-length message
     """
-    assert len(key) == 32
-    assert len(msg) == 32
-    assert len(sig) == 64
+    assert_equal(len(key), 32)
+    assert_equal(len(sig), 64)
 
     P = secp256k1.GE.from_bytes_xonly(key)
     if P is None:
@@ -271,9 +270,8 @@ def sign_schnorr(key, msg, aux=None, flip_p=False, flip_r=False):
     if aux is None:
         aux = bytes(32)
 
-    assert len(key) == 32
-    assert len(msg) == 32
-    assert len(aux) == 32
+    assert_equal(len(key), 32)
+    assert_equal(len(aux), 32)
 
     sec = int.from_bytes(key, 'big')
     if sec == 0 or sec >= ORDER:
@@ -283,7 +281,7 @@ def sign_schnorr(key, msg, aux=None, flip_p=False, flip_r=False):
         sec = ORDER - sec
     t = (sec ^ int.from_bytes(TaggedHash("BIP0340/aux", aux), 'big')).to_bytes(32, 'big')
     kp = int.from_bytes(TaggedHash("BIP0340/nonce", t + P.to_bytes_xonly() + msg), 'big') % ORDER
-    assert kp != 0
+    assert_not_equal(kp, 0)
     R = kp * secp256k1.G
     k = kp if R.y.is_even() != flip_r else ORDER - kp
     e = int.from_bytes(TaggedHash("BIP0340/challenge", R.to_bytes_xonly() + P.to_bytes_xonly() + msg), 'big') % ORDER
@@ -314,11 +312,20 @@ class TestFrameworkKey(unittest.TestCase):
                     self.assertFalse(verify_pubkey.verify_ecdsa(sig_ecdsa, msg))
                     self.assertFalse(verify_schnorr(verify_xonly_pubkey, sig_schnorr, msg))
 
+    def test_verify_ecdsa_rejects_short_sig(self):
+        """A signature too short to hold a DER header returns False, not IndexError."""
+        privkey = ECKey()
+        privkey.set(generate_privkey(), compressed=True)
+        pubkey = privkey.get_pubkey()
+        msg = bytes(32)
+        for sig in [b'', b'\x30', b'\x30\x00', b'\x30\x01\x02']:
+            self.assertFalse(pubkey.verify_ecdsa(sig, msg))
+
     def test_schnorr_testvectors(self):
         """Implement the BIP340 test vectors (read from bip340_test_vectors.csv)."""
         num_tests = 0
         vectors_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'bip340_test_vectors.csv')
-        with open(vectors_file, newline='', encoding='utf8') as csvfile:
+        with open(vectors_file, newline='') as csvfile:
             reader = csv.reader(csvfile)
             next(reader)
             for row in reader:

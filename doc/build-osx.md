@@ -1,6 +1,6 @@
 # macOS Build Guide
 
-**Updated for MacOS [15](https://www.apple.com/macos/macos-sequoia/)**
+**Updated for MacOS [26](https://www.apple.com/os/macos/)**
 
 This guide describes how to build bitcoind, command-line utilities, and GUI on macOS.
 
@@ -16,7 +16,9 @@ macOS comes with a built-in Terminal located in:
 ### 1. Xcode Command Line Tools
 
 The Xcode Command Line Tools are a collection of build tools for macOS.
-These tools must be installed in order to build Bitcoin Core from source.
+Version 16.2 (or higher) of these tools must be
+[installed](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools)
+in order to build Bitcoin Core from source.
 
 To install, run the following command from your terminal:
 
@@ -48,8 +50,21 @@ See [dependencies.md](dependencies.md) for a complete overview.
 To install, run the following from your terminal:
 
 ``` bash
-brew install cmake boost pkgconf libevent
+brew install cmake boost capnp
 ```
+
+#### Wallet Dependencies
+
+If you do not need wallet functionality, you can use `-DENABLE_WALLET=OFF` in
+the `cmake -B` step below.
+
+SQLite is required, but since macOS ships with a useable `sqlite` package, you don't need to
+install anything.
+
+#### IPC Dependencies
+
+If you do not need IPC functionality (see [multiprocess.md](multiprocess.md))
+you can omit `capnp` and use `-DENABLE_IPC=OFF` in the `cmake -B` step below.
 
 ### 4. Clone Bitcoin repository
 
@@ -63,27 +78,6 @@ git clone https://github.com/bitcoin/bitcoin.git
 
 ### 5. Install Optional Dependencies
 
-#### Wallet Dependencies
-
-It is not necessary to build wallet functionality to run `bitcoind` or  `bitcoin-qt`.
-
-###### Descriptor Wallet Support
-
-`sqlite` is required to support for descriptor wallets.
-
-macOS ships with a useable `sqlite` package, meaning you don't need to
-install anything.
-
-###### Legacy Wallet Support
-
-`berkeley-db@4` is only required to support for legacy wallets.
-Skip if you don't intend to use legacy wallets.
-
-``` bash
-brew install berkeley-db@4
-```
----
-
 #### GUI Dependencies
 
 ###### Qt
@@ -92,7 +86,7 @@ Bitcoin Core includes a GUI built with the cross-platform Qt Framework. To compi
 Qt, libqrencode and pass `-DBUILD_GUI=ON`. Skip if you don't intend to use the GUI.
 
 ``` bash
-brew install qt@5
+brew install qt@6
 ```
 
 Note: Building with Qt binaries downloaded from the Qt website is not officially supported.
@@ -112,11 +106,11 @@ Otherwise, if you don't need QR encoding support, you can pass `-DWITH_QRENCODE=
 
 #### ZMQ Dependencies
 
-Support for ZMQ notifications requires the following dependency.
+Bitcoin Core can provide notifications via ZeroMQ. To compile ZMQ support, install the following dependency and pass `-DWITH_ZMQ=ON` when configuring.
 Skip if you do not need ZMQ functionality.
 
 ``` bash
-brew install zeromq
+brew install zeromq pkgconf
 ```
 
 Check out the [further configuration](#further-configuration) section for more information.
@@ -139,7 +133,7 @@ brew install python
 #### Deploy Dependencies
 
 You can [deploy](#3-deploy-optional) a `.zip` containing the Bitcoin Core application.
-It is required that you have `python` installed.
+It is required that you have `python` and `zip` installed.
 
 ## Building Bitcoin Core
 
@@ -147,15 +141,7 @@ It is required that you have `python` installed.
 
 There are many ways to configure Bitcoin Core, here are a few common examples:
 
-##### Wallet (BDB + SQlite) Support, No GUI:
-
-If `berkeley-db@4` or `sqlite` are not installed, this will throw an error.
-
-``` bash
-cmake -B build -DWITH_BDB=ON
-```
-
-##### Wallet (only SQlite) and GUI Support:
+##### Wallet and GUI:
 
 This enables the GUI.
 If `sqlite` or `qt` are not installed, this will throw an error.
@@ -185,13 +171,13 @@ After configuration, you are ready to compile.
 Run the following in your terminal to compile Bitcoin Core:
 
 ``` bash
-cmake --build build     # Use "-j N" here for N parallel jobs.
-ctest --test-dir build  # Use "-j N" for N parallel tests. Some tests are disabled if Python 3 is not available.
+cmake --build build     # Append "-j N" here for N parallel jobs.
+ctest --test-dir build  # Append "-j N" for N parallel tests.
 ```
 
 ### 3. Deploy (optional)
 
-You can also create a  `.zip` containing the `.app` bundle by running the following command:
+You can also create a `.zip` containing the `.app` bundle by running the following command:
 
 ``` bash
 cmake --build build --target deploy
@@ -199,8 +185,12 @@ cmake --build build --target deploy
 
 ## Running Bitcoin Core
 
-Bitcoin Core should now be available at `./build/src/bitcoind`.
-If you compiled support for the GUI, it should be available at `./build/src/qt/bitcoin-qt`.
+Bitcoin Core should now be available at `./build/bin/bitcoind`.
+If you compiled support for the GUI, it should be available at `./build/bin/bitcoin-qt`.
+
+There is also a multifunction command line interface at `./build/bin/bitcoin`
+supporting subcommands like `bitcoin node`, `bitcoin gui`, `bitcoin rpc`, and
+others that can be listed with `bitcoin help`.
 
 The first time you run `bitcoind` or `bitcoin-qt`, it will start downloading the blockchain.
 This process could take many hours, or even days on slower than average systems.
@@ -230,8 +220,8 @@ tail -f $HOME/Library/Application\ Support/Bitcoin/debug.log
 ## Other commands:
 
 ```shell
-./build/src/bitcoind -daemon      # Starts the bitcoin daemon.
-./build/src/bitcoin-cli --help    # Outputs a list of command-line options.
-./build/src/bitcoin-cli help      # Outputs a list of RPC commands when the daemon is running.
-./build/src/qt/bitcoin-qt -server # Starts the bitcoin-qt server mode, allows bitcoin-cli control
+./build/bin/bitcoind -daemon      # Starts the bitcoin daemon.
+./build/bin/bitcoin-cli --help    # Outputs a list of command-line options.
+./build/bin/bitcoin-cli help      # Outputs a list of RPC commands when the daemon is running.
+./build/bin/bitcoin-qt -server # Starts the bitcoin-qt server mode, allows bitcoin-cli control
 ```

@@ -1,4 +1,4 @@
-// Copyright (c) 2022 The Bitcoin Core developers
+// Copyright (c) 2022-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -9,6 +9,7 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/util/poolresourcetester.h>
+#include <util/byte_units.h>
 
 #include <cstdint>
 #include <tuple>
@@ -25,11 +26,11 @@ class PoolResourceFuzzer
     size_t m_total_allocated{};
 
     struct Entry {
-        Span<std::byte> span;
+        std::span<std::byte> span;
         size_t alignment;
         uint64_t seed;
 
-        Entry(Span<std::byte> s, size_t a, uint64_t se) : span(s), alignment(a), seed(se) {}
+        Entry(std::span<std::byte> s, size_t a, uint64_t se) : span(s), alignment(a), seed(se) {}
     };
 
     std::vector<Entry> m_entries;
@@ -48,7 +49,7 @@ public:
         assert((alignment & (alignment - 1)) == 0); // Alignment must be power of 2.
         assert((size & (alignment - 1)) == 0);      // Size must be a multiple of alignment.
 
-        auto span = Span(static_cast<std::byte*>(m_test_resource.Allocate(size, alignment)), size);
+        auto span = std::span(static_cast<std::byte*>(m_test_resource.Allocate(size, alignment)), size);
         m_total_allocated += size;
 
         auto ptr_val = reinterpret_cast<std::uintptr_t>(span.data());
@@ -61,7 +62,7 @@ public:
     void
     Allocate()
     {
-        if (m_total_allocated > 0x1000000) return;
+        if (m_total_allocated > 16_MiB) return;
         size_t alignment_bits = m_provider.ConsumeIntegralInRange<size_t>(0, 7);
         size_t alignment = size_t{1} << alignment_bits;
         size_t size_bits = m_provider.ConsumeIntegralInRange<size_t>(0, 16 - alignment_bits);
@@ -115,8 +116,7 @@ public:
 
     void Fuzz()
     {
-        LIMITED_WHILE(m_provider.ConsumeBool(), 10000)
-        {
+        LIMITED_WHILE (m_provider.ConsumeBool(), 10000) {
             CallOneOf(
                 m_provider,
                 [&] { Allocate(); },

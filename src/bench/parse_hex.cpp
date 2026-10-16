@@ -1,14 +1,15 @@
-// Copyright (c) 2024- The Bitcoin Core developers
+// Copyright (c) 2024-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bench/bench.h>
 #include <random.h>
-#include <stddef.h>
+#include <util/check.h>
 #include <util/strencodings.h>
-#include <cassert>
+
+#include <cstddef>
 #include <optional>
-#include <vector>
+#include <string>
 
 std::string generateHexString(size_t length) {
     const auto hex_digits = "0123456789ABCDEF";
@@ -33,4 +34,4 @@ static void HexParse(benchmark::Bench& bench)
     });
 }
 
-BENCHMARK(HexParse, benchmark::PriorityLevel::HIGH);
+BENCHMARK(HexParse);

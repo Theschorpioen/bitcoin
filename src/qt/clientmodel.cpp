@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2022 The Bitcoin Core developers
+// Copyright (c) 2011-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -23,7 +23,7 @@
 #include <util/time.h>
 #include <validation.h>
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <QDebug>
 #include <QMetaObject>
@@ -210,7 +210,7 @@ bool ClientModel::isReleaseVersion() const
 
 QString ClientModel::formatClientStartupTime() const
 {
-    return QDateTime::fromSecsSinceEpoch(GetStartupTime()).toString();
+    return QDateTime::currentDateTime().addSecs(-TicksSeconds(GetUptime())).toString();
 }
 
 QString ClientModel::dataDir() const
@@ -287,10 +287,11 @@ void ClientModel::unsubscribeFromCoreSignals()
 
 bool ClientModel::getProxyInfo(std::string& ip_port) const
 {
-    Proxy ipv4, ipv6;
-    if (m_node.getProxy((Network) 1, ipv4) && m_node.getProxy((Network) 2, ipv6)) {
-      ip_port = ipv4.proxy.ToStringAddrPort();
-      return true;
+    const auto ipv4 = m_node.getProxy(NET_IPV4);
+    const auto ipv6 = m_node.getProxy(NET_IPV6);
+    if (ipv4 && ipv6) {
+        ip_port = ipv4->proxy.ToStringAddrPort();
+        return true;
     }
     return false;
 }

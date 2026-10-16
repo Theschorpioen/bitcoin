@@ -14,13 +14,15 @@ add_executable(test_bitcoin-qt
   ../../init/bitcoin-qt.cpp
 )
 
+add_windows_application_manifest(test_bitcoin-qt)
+
 target_link_libraries(test_bitcoin-qt
   core_interface
   bitcoinqt
   test_util
   bitcoin_node
   Boost::headers
-  Qt5::Test
+  Qt6::Test
 )
 
 import_plugins(test_bitcoin-qt)
@@ -38,13 +40,15 @@ add_test(NAME test_bitcoin-qt
   COMMAND test_bitcoin-qt
 )
 if(WIN32 AND VCPKG_TARGET_TRIPLET)
-  # On Windows, vcpkg configures Qt with `-opengl dynamic`, which makes
-  # the "minimal" platform plugin unusable due to internal Qt bugs.
-  set_tests_properties(test_bitcoin-qt PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=windows"
+  set(plugin_path "$<SHELL_PATH:$<PATH:GET_PARENT_PATH,$<PATH:GET_PARENT_PATH,$<TARGET_PROPERTY:Qt6::QWindowsIntegrationPlugin,LOCATION_$<CONFIG>>>>>")
+  set_property(TEST test_bitcoin-qt APPEND PROPERTY
+    ENVIRONMENT_MODIFICATION
+      # On Windows, vcpkg configures Qt with `-opengl dynamic`, which makes
+      # the "minimal" platform plugin unusable due to internal Qt bugs.
+      QT_QPA_PLATFORM=set:windows
+      QT_PLUGIN_PATH=set:${plugin_path}
   )
+  unset(plugin_path)
 endif()
 
-install(TARGETS test_bitcoin-qt
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+install_binary_component(test_bitcoin-qt INTERNAL)

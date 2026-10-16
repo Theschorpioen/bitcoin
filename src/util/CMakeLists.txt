@@ -9,7 +9,9 @@ add_library(bitcoin_util STATIC EXCLUDE_FROM_ALL
   bytevectorhash.cpp
   chaintype.cpp
   check.cpp
+  exec.cpp
   exception.cpp
+  fees.cpp
   feefrac.cpp
   fs.cpp
   fs_helpers.cpp
@@ -32,7 +34,6 @@ add_library(bitcoin_util STATIC EXCLUDE_FROM_ALL
   ../random.cpp
   ../randomenv.cpp
   ../streams.cpp
-  ../support/lockedpool.cpp
   ../sync.cpp
 )
 
@@ -43,4 +44,5 @@ target_link_libraries(bitcoin_util
     bitcoin_crypto
     $<$<PLATFORM_ID:Windows>:ws2_32>
     $<$<PLATFORM_ID:Windows>:iphlpapi>
+    $<$<PLATFORM_ID:Windows>:bcrypt>
 )

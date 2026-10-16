@@ -10,14 +10,18 @@ target_sources(test_bitcoin
     wallet_test_fixture.cpp
     db_tests.cpp
     coinselector_tests.cpp
+    coinselection_tests.cpp
     feebumper_tests.cpp
     group_outputs_tests.cpp
     init_tests.cpp
     ismine_tests.cpp
     psbt_wallet_tests.cpp
+    rescan_tests.cpp
     scriptpubkeyman_tests.cpp
     spend_tests.cpp
     wallet_crypto_tests.cpp
+    wallet_interfaces_tests.cpp
+    wallet_rpc_tests.cpp
     wallet_tests.cpp
     wallet_transaction_tests.cpp
     walletdb_tests.cpp

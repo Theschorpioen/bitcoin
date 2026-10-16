@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# Copyright (c) 2019-2021 The Bitcoin Core developers
+# Copyright (c) 2019-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """
 Test transaction download behavior
 """
 from decimal import Decimal
+from enum import Enum
 import time
 
 from test_framework.mempool_util import (
@@ -15,6 +16,7 @@ from test_framework.messages import (
     CInv,
     MSG_TX,
     MSG_TYPE_MASK,
+    MSG_WITNESS_TX,
     MSG_WTX,
     msg_inv,
     msg_notfound,
@@ -23,6 +25,10 @@ from test_framework.messages import (
 from test_framework.p2p import (
     P2PInterface,
     p2p_lock,
+    NONPREF_PEER_TX_DELAY,
+    GETDATA_TX_INTERVAL,
+    TXID_RELAY_DELAY,
+    OVERLOADED_PEER_TX_DELAY
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -42,24 +48,28 @@ class TestP2PConn(P2PInterface):
                 self.tx_getdata_count += 1
 
 
-# Constants from net_processing
-GETDATA_TX_INTERVAL = 60  # seconds
-INBOUND_PEER_TX_DELAY = 2  # seconds
-TXID_RELAY_DELAY = 2 # seconds
-OVERLOADED_PEER_DELAY = 2 # seconds
-MAX_GETDATA_IN_FLIGHT = 100
+# Constants from txdownloadman
+MAX_PEER_TX_REQUEST_IN_FLIGHT = 100
 MAX_PEER_TX_ANNOUNCEMENTS = 5000
-NONPREF_PEER_TX_DELAY = 2
 
 # Python test constants
 NUM_INBOUND = 10
-MAX_GETDATA_INBOUND_WAIT = GETDATA_TX_INTERVAL + INBOUND_PEER_TX_DELAY + TXID_RELAY_DELAY
+MAX_GETDATA_INBOUND_WAIT = GETDATA_TX_INTERVAL + NONPREF_PEER_TX_DELAY + TXID_RELAY_DELAY
 
+class ConnectionType(Enum):
+    """ Different connection types
+    1. INBOUND: Incoming connection, not whitelisted
+    2. OUTBOUND: Outgoing connection
+    3. WHITELIST: Incoming connection, but whitelisted
+    """
+    INBOUND = 0
+    OUTBOUND = 1
+    WHITELIST = 2
 
 class TxDownloadTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
-        self.extra_args= [['-datacarriersize=100000', '-maxmempool=5', '-persistmempool=0']] * self.num_nodes
+        self.extra_args= [['-maxmempool=5', '-persistmempool=0']] * self.num_nodes
 
     def test_tx_requests(self):
         self.log.info("Test that we request transactions from all our peers, eventually")
@@ -93,11 +103,13 @@ class TxDownloadTest(BitcoinTestFramework):
     def test_inv_block(self):
         self.log.info("Generate a transaction on node 0")
         tx = self.wallet.create_self_transfer()
-        txid = int(tx['txid'], 16)
+        wtxid = int(tx['wtxid'], 16)
+
+        self.nodes[0].setmocktime(int(time.time()))
 
         self.log.info(
             "Announce the transaction to all nodes from all {} incoming peers, but never send it".format(NUM_INBOUND))
-        msg = msg_inv([CInv(t=MSG_TX, h=txid)])
+        msg = msg_inv([CInv(t=MSG_WTX, h=wtxid)])
         for p in self.peers:
             p.send_and_ping(msg)
 
@@ -105,21 +117,30 @@ class TxDownloadTest(BitcoinTestFramework):
         self.nodes[0].sendrawtransaction(tx['hex'])
 
         # Since node 1 is connected outbound to an honest peer (node 0), it
-        # should get the tx within a timeout. (Assuming that node 0
-        # announced the tx within the timeout)
+        # should get the tx within a timeout.
+        # However, node 0 sees the same connection as inbound, so it may not
+        # announce the tx within the timeout.
         # The timeout is the sum of
         # * the worst case until the tx is first requested from an inbound
         #   peer, plus
         # * the first time it is re-requested from the outbound peer, plus
         # * 2 seconds to avoid races
-        assert self.nodes[1].getpeerinfo()[0]['inbound'] == False
-        timeout = 2 + INBOUND_PEER_TX_DELAY + GETDATA_TX_INTERVAL
+        assert_equal(self.nodes[0].getpeerinfo()[0]["inbound"], True)
+        assert_equal(self.nodes[0].getpeerinfo()[0]["inv_to_send"], 1)
+        assert_equal(self.nodes[1].getpeerinfo()[0]['inbound'], False)
+        timeout = 2 + NONPREF_PEER_TX_DELAY + GETDATA_TX_INTERVAL
         self.log.info("Tx should be received at node 1 after {} seconds".format(timeout))
-        self.sync_mempools(timeout=timeout)
+        self.nodes[0].bumpmocktime(timeout)
+        # Use an unrelated peer to ensure node 0 calls `SendMessages` at least once
+        self.nodes[0].p2ps[0].sync_with_ping()
+        assert_equal(self.nodes[0].getpeerinfo()[0]['inv_to_send'], 0)  # May fail rarely, retry the test
+        self.sync_mempools()
+
+        self.nodes[0].setmocktime(0)
 
     def test_in_flight_max(self):
-        self.log.info("Test that we don't load peers with more than {} transaction requests immediately".format(MAX_GETDATA_IN_FLIGHT))
-        txids = [i for i in range(MAX_GETDATA_IN_FLIGHT + 2)]
+        self.log.info("Test that we don't load peers with more than {} transaction requests immediately".format(MAX_PEER_TX_REQUEST_IN_FLIGHT))
+        txids = [i for i in range(MAX_PEER_TX_REQUEST_IN_FLIGHT + 2)]
 
         p = self.nodes[0].p2ps[0]
 
@@ -128,22 +149,22 @@ class TxDownloadTest(BitcoinTestFramework):
 
         mock_time = int(time.time() + 1)
         self.nodes[0].setmocktime(mock_time)
-        for i in range(MAX_GETDATA_IN_FLIGHT):
-            p.send_message(msg_inv([CInv(t=MSG_WTX, h=txids[i])]))
+        for i in range(MAX_PEER_TX_REQUEST_IN_FLIGHT):
+            p.send_without_ping(msg_inv([CInv(t=MSG_WTX, h=txids[i])]))
         p.sync_with_ping()
-        mock_time += INBOUND_PEER_TX_DELAY
+        mock_time += NONPREF_PEER_TX_DELAY
         self.nodes[0].setmocktime(mock_time)
-        p.wait_until(lambda: p.tx_getdata_count >= MAX_GETDATA_IN_FLIGHT)
-        for i in range(MAX_GETDATA_IN_FLIGHT, len(txids)):
-            p.send_message(msg_inv([CInv(t=MSG_WTX, h=txids[i])]))
+        p.wait_until(lambda: p.tx_getdata_count >= MAX_PEER_TX_REQUEST_IN_FLIGHT)
+        for i in range(MAX_PEER_TX_REQUEST_IN_FLIGHT, len(txids)):
+            p.send_without_ping(msg_inv([CInv(t=MSG_WTX, h=txids[i])]))
         p.sync_with_ping()
-        self.log.info("No more than {} requests should be seen within {} seconds after announcement".format(MAX_GETDATA_IN_FLIGHT, INBOUND_PEER_TX_DELAY + OVERLOADED_PEER_DELAY - 1))
-        self.nodes[0].setmocktime(mock_time + INBOUND_PEER_TX_DELAY + OVERLOADED_PEER_DELAY - 1)
+        self.log.info("No more than {} requests should be seen within {} seconds after announcement".format(MAX_PEER_TX_REQUEST_IN_FLIGHT, NONPREF_PEER_TX_DELAY + OVERLOADED_PEER_TX_DELAY - 1))
+        self.nodes[0].setmocktime(mock_time + NONPREF_PEER_TX_DELAY + OVERLOADED_PEER_TX_DELAY - 1)
         p.sync_with_ping()
         with p2p_lock:
-            assert_equal(p.tx_getdata_count, MAX_GETDATA_IN_FLIGHT)
-        self.log.info("If we wait {} seconds after announcement, we should eventually get more requests".format(INBOUND_PEER_TX_DELAY + OVERLOADED_PEER_DELAY))
-        self.nodes[0].setmocktime(mock_time + INBOUND_PEER_TX_DELAY + OVERLOADED_PEER_DELAY)
+            assert_equal(p.tx_getdata_count, MAX_PEER_TX_REQUEST_IN_FLIGHT)
+        self.log.info("If we wait {} seconds after announcement, we should eventually get more requests".format(NONPREF_PEER_TX_DELAY + OVERLOADED_PEER_TX_DELAY))
+        self.nodes[0].setmocktime(mock_time + NONPREF_PEER_TX_DELAY + OVERLOADED_PEER_TX_DELAY)
         p.wait_until(lambda: p.tx_getdata_count == len(txids))
 
     def test_expiry_fallback(self):
@@ -152,7 +173,7 @@ class TxDownloadTest(BitcoinTestFramework):
         peer1 = self.nodes[0].add_p2p_connection(TestP2PConn())
         peer2 = self.nodes[0].add_p2p_connection(TestP2PConn())
         for p in [peer1, peer2]:
-            p.send_message(msg_inv([CInv(t=MSG_WTX, h=WTXID)]))
+            p.send_without_ping(msg_inv([CInv(t=MSG_WTX, h=WTXID)]))
         # One of the peers is asked for the tx
         peer2.wait_until(lambda: sum(p.tx_getdata_count for p in [peer1, peer2]) == 1)
         with p2p_lock:
@@ -168,7 +189,7 @@ class TxDownloadTest(BitcoinTestFramework):
         peer1 = self.nodes[0].add_p2p_connection(TestP2PConn())
         peer2 = self.nodes[0].add_p2p_connection(TestP2PConn())
         for p in [peer1, peer2]:
-            p.send_message(msg_inv([CInv(t=MSG_WTX, h=WTXID)]))
+            p.send_without_ping(msg_inv([CInv(t=MSG_WTX, h=WTXID)]))
         # One of the peers is asked for the tx
         peer2.wait_until(lambda: sum(p.tx_getdata_count for p in [peer1, peer2]) == 1)
         with p2p_lock:
@@ -184,7 +205,7 @@ class TxDownloadTest(BitcoinTestFramework):
         peer1 = self.nodes[0].add_p2p_connection(TestP2PConn())
         peer2 = self.nodes[0].add_p2p_connection(TestP2PConn())
         for p in [peer1, peer2]:
-            p.send_message(msg_inv([CInv(t=MSG_WTX, h=WTXID)]))
+            p.send_without_ping(msg_inv([CInv(t=MSG_WTX, h=WTXID)]))
         # One of the peers is asked for the tx
         peer2.wait_until(lambda: sum(p.tx_getdata_count for p in [peer1, peer2]) == 1)
         with p2p_lock:
@@ -193,24 +214,86 @@ class TxDownloadTest(BitcoinTestFramework):
         peer_notfound.send_and_ping(msg_notfound(vec=[CInv(MSG_WTX, WTXID)]))  # Send notfound, so that fallback peer is selected
         peer_fallback.wait_until(lambda: peer_fallback.tx_getdata_count >= 1, timeout=1)
 
-    def test_preferred_inv(self, preferred=False):
-        if preferred:
-            self.log.info('Check invs from preferred peers are downloaded immediately')
+    def test_preferred_inv(self, connection_type: ConnectionType):
+        if connection_type == ConnectionType.WHITELIST:
+            self.log.info('Check invs from preferred (whitelisted) peers are downloaded immediately')
             self.restart_node(0, extra_args=['-whitelist=noban@127.0.0.1'])
-        else:
+        elif connection_type == ConnectionType.OUTBOUND:
+            self.log.info('Check invs from preferred (outbound) peers are downloaded immediately')
+            self.restart_node(0)
+        elif connection_type == ConnectionType.INBOUND:
             self.log.info('Check invs from non-preferred peers are downloaded after {} s'.format(NONPREF_PEER_TX_DELAY))
+            self.restart_node(0)
+        else:
+            raise Exception("invalid connection_type")
+
         mock_time = int(time.time() + 1)
         self.nodes[0].setmocktime(mock_time)
-        peer = self.nodes[0].add_p2p_connection(TestP2PConn())
-        peer.send_message(msg_inv([CInv(t=MSG_WTX, h=0xff00ff00)]))
-        peer.sync_with_ping()
-        if preferred:
+
+        if connection_type == ConnectionType.OUTBOUND:
+            peer = self.nodes[0].add_outbound_p2p_connection(
+               TestP2PConn(), wait_for_verack=True, p2p_idx=1, connection_type="outbound-full-relay")
+        else:
+            peer = self.nodes[0].add_p2p_connection(TestP2PConn())
+
+        peer.send_and_ping(msg_inv([CInv(t=MSG_WTX, h=0xff00ff00)]))
+        if connection_type != ConnectionType.INBOUND:
             peer.wait_until(lambda: peer.tx_getdata_count >= 1, timeout=1)
         else:
             with p2p_lock:
                 assert_equal(peer.tx_getdata_count, 0)
             self.nodes[0].setmocktime(mock_time + NONPREF_PEER_TX_DELAY)
             peer.wait_until(lambda: peer.tx_getdata_count >= 1, timeout=1)
+
+    def test_preferred_tiebreaker_inv(self):
+        self.log.info("Test that preferred peers are always selected over non-preferred when ready")
+
+        self.restart_node(0)
+        self.nodes[0].setmocktime(int(time.time()))
+
+        # Peer that is immediately asked, but never responds.
+        # This will set us up to have two ready requests, one
+        # of which is preferred and one which is not
+        unresponsive_peer = self.nodes[0].add_outbound_p2p_connection(
+           TestP2PConn(), wait_for_verack=True, p2p_idx=0, connection_type="outbound-full-relay")
+        unresponsive_peer.send_and_ping(msg_inv([CInv(t=MSG_WTX, h=0xff00ff00)]))
+        unresponsive_peer.wait_until(lambda: unresponsive_peer.tx_getdata_count >= 1, timeout=1)
+
+        # A bunch of incoming (non-preferred) connections that advertise the same tx
+        non_pref_peers = []
+        NUM_INBOUND = 10
+        for _ in range(NUM_INBOUND):
+            non_pref_peers.append(self.nodes[0].add_p2p_connection(TestP2PConn()))
+            non_pref_peers[-1].send_and_ping(msg_inv([CInv(t=MSG_WTX, h=0xff00ff00)]))
+
+        # Check that no request made due to in-flight
+        self.nodes[0].bumpmocktime(NONPREF_PEER_TX_DELAY)
+        with p2p_lock:
+            for peer in non_pref_peers:
+                assert_equal(peer.tx_getdata_count, 0)
+
+        # Now add another outbound (preferred) which is immediately ready for consideration
+        # upon advertisement
+        pref_peer = self.nodes[0].add_outbound_p2p_connection(
+           TestP2PConn(), wait_for_verack=True, p2p_idx=1, connection_type="outbound-full-relay")
+        pref_peer.send_and_ping(msg_inv([CInv(t=MSG_WTX, h=0xff00ff00)]))
+
+        assert_equal(len(self.nodes[0].getpeerinfo()), NUM_INBOUND + 2)
+
+        # Still have to wait for in-flight to timeout
+        with p2p_lock:
+            assert_equal(pref_peer.tx_getdata_count, 0)
+
+        # Timeout in-flight
+        self.nodes[0].bumpmocktime(GETDATA_TX_INTERVAL - NONPREF_PEER_TX_DELAY)
+
+        # Preferred peers are *always* selected next if ready
+        pref_peer.wait_until(lambda: pref_peer.tx_getdata_count >= 1, timeout=10)
+
+        # And none for non-preferred
+        for non_pref_peer in non_pref_peers:
+            with p2p_lock:
+                assert_equal(non_pref_peer.tx_getdata_count, 0)
 
     def test_txid_inv_delay(self, glob_wtxid=False):
         self.log.info('Check that inv from a txid-relay peers are delayed by {} s, with a wtxid peer {}'.format(TXID_RELAY_DELAY, glob_wtxid))
@@ -222,8 +305,7 @@ class TxDownloadTest(BitcoinTestFramework):
             # Add a second wtxid-relay connection otherwise TXID_RELAY_DELAY is waived in
             # lack of wtxid-relay peers
             self.nodes[0].add_p2p_connection(TestP2PConn(wtxidrelay=True))
-        peer.send_message(msg_inv([CInv(t=MSG_TX, h=0xff11ff11)]))
-        peer.sync_with_ping()
+        peer.send_and_ping(msg_inv([CInv(t=MSG_TX, h=0xff11ff11)]))
         with p2p_lock:
             assert_equal(peer.tx_getdata_count, 0 if glob_wtxid else 1)
         self.nodes[0].setmocktime(mock_time + TXID_RELAY_DELAY)
@@ -233,19 +315,85 @@ class TxDownloadTest(BitcoinTestFramework):
         self.log.info('Test how large inv batches are handled with relay permission')
         self.restart_node(0, extra_args=['-whitelist=relay@127.0.0.1'])
         peer = self.nodes[0].add_p2p_connection(TestP2PConn())
-        peer.send_message(msg_inv([CInv(t=MSG_WTX, h=wtxid) for wtxid in range(MAX_PEER_TX_ANNOUNCEMENTS + 1)]))
+        peer.send_without_ping(msg_inv([CInv(t=MSG_WTX, h=wtxid) for wtxid in range(MAX_PEER_TX_ANNOUNCEMENTS + 1)]))
         peer.wait_until(lambda: peer.tx_getdata_count == MAX_PEER_TX_ANNOUNCEMENTS + 1)
 
         self.log.info('Test how large inv batches are handled without relay permission')
         self.restart_node(0)
         peer = self.nodes[0].add_p2p_connection(TestP2PConn())
-        peer.send_message(msg_inv([CInv(t=MSG_WTX, h=wtxid) for wtxid in range(MAX_PEER_TX_ANNOUNCEMENTS + 1)]))
+        peer.send_without_ping(msg_inv([CInv(t=MSG_WTX, h=wtxid) for wtxid in range(MAX_PEER_TX_ANNOUNCEMENTS + 1)]))
         peer.wait_until(lambda: peer.tx_getdata_count == MAX_PEER_TX_ANNOUNCEMENTS)
         peer.sync_with_ping()
 
+    def test_duplicate_tx_inv(self):
+        self.log.info('Check that duplicate transaction identifiers in one inv message are processed once')
+        node = self.nodes[0]
+        node.logging(include=['net'])
+
+        def send_invs_and_read_log(peer, invs):
+            log_start = node.debug_log_size(encoding='utf-8')
+            peer.send_and_ping(msg_inv(invs))
+            with open(node.debug_log_path, encoding='utf-8', errors='replace') as debug_log:
+                debug_log.seek(log_start)
+                return debug_log.read()
+
+        for wtxidrelay, inv_type, inv_name, mismatched_type, mismatched_name, hash_a, hash_b in [
+            (False, MSG_TX, 'tx', MSG_WTX, 'wtx', 0xaabbcc, 0xddeeff),
+            (True, MSG_WTX, 'wtx', MSG_TX, 'tx', 0x112233, 0x445566),
+        ]:
+            peer = node.add_p2p_connection(TestP2PConn(wtxidrelay=wtxidrelay))
+            inv_a_log = f"got inv: {inv_name} {hash_a:064x}"
+            inv_b_log = f"got inv: {inv_name} {hash_b:064x}"
+            mismatched_inv_log = f"got inv: {mismatched_name} {hash_a:064x}"
+
+            log = send_invs_and_read_log(peer, [
+                CInv(t=mismatched_type, h=hash_a),
+                CInv(t=inv_type, h=hash_a),
+                CInv(t=inv_type, h=hash_b),
+                CInv(t=inv_type, h=hash_a),
+                CInv(t=inv_type, h=hash_b),
+            ])
+            assert_equal(log.count(inv_a_log), 1)
+            assert_equal(log.count(inv_b_log), 1)
+            assert_equal(log.count(mismatched_inv_log), 0)
+
+            # The duplicate filter is scoped to a single INV message.
+            log = send_invs_and_read_log(peer, [
+                CInv(t=inv_type, h=hash_a),
+                CInv(t=inv_type, h=hash_a),
+            ])
+            assert_equal(log.count(inv_a_log), 1)
+            assert_equal(log.count(inv_b_log), 0)
+
+        self.log.info('Check that MSG_TX and MSG_WITNESS_TX are deduplicated as txids')
+        peer = node.add_p2p_connection(TestP2PConn(wtxidrelay=False))
+        for first_type, first_name, second_type, second_name, hash_a in [
+            (MSG_TX, 'tx', MSG_WITNESS_TX, 'witness-tx', 0x667788),
+            (MSG_WITNESS_TX, 'witness-tx', MSG_TX, 'tx', 0x778899),
+        ]:
+            log = send_invs_and_read_log(peer, [
+                CInv(t=first_type, h=hash_a),
+                CInv(t=second_type, h=hash_a),
+            ])
+            assert_equal(log.count(f"got inv: {first_name} {hash_a:064x}"), 1)
+            assert_equal(log.count(f"got inv: {second_name} {hash_a:064x}"), 0)
+
+        self.log.info('Check that txids and wtxids are deduplicated separately')
+        peer = node.add_p2p_connection(TestP2PConn(wtxidrelay=True))
+        for first_type, second_type, hash_a in [
+            (MSG_WITNESS_TX, MSG_WTX, 0x8899aa),
+            (MSG_WTX, MSG_WITNESS_TX, 0x99aabb),
+        ]:
+            log = send_invs_and_read_log(peer, [
+                CInv(t=first_type, h=hash_a),
+                CInv(t=second_type, h=hash_a),
+            ])
+            assert_equal(log.count(f"got inv: witness-tx {hash_a:064x}"), 1)
+            assert_equal(log.count(f"got inv: wtx {hash_a:064x}"), 1)
+
     def test_spurious_notfound(self):
         self.log.info('Check that spurious notfound is ignored')
-        self.nodes[0].p2ps[0].send_message(msg_notfound(vec=[CInv(MSG_TX, 1)]))
+        self.nodes[0].p2ps[0].send_without_ping(msg_notfound(vec=[CInv(MSG_TX, 1)]))
 
     def test_rejects_filter_reset(self):
         self.log.info('Check that rejected tx is not requested again')
@@ -270,6 +418,36 @@ class TxDownloadTest(BitcoinTestFramework):
         node.bumpmocktime(MAX_GETDATA_INBOUND_WAIT)
         peer.wait_for_getdata([int(low_fee_tx['wtxid'], 16)])
 
+    def test_inv_wtxidrelay_mismatch(self):
+        self.log.info("Check that INV messages that don't match the wtxidrelay setting are ignored")
+        node = self.nodes[0]
+        wtxidrelay_on_peer = node.add_p2p_connection(TestP2PConn(wtxidrelay=True))
+        wtxidrelay_off_peer = node.add_p2p_connection(TestP2PConn(wtxidrelay=False))
+        random_tx = self.wallet.create_self_transfer()
+
+        # MSG_TX INV from wtxidrelay=True peer -> mismatch, ignored
+        wtxidrelay_on_peer.send_and_ping(msg_inv([CInv(t=MSG_TX, h=int(random_tx['txid'], 16))]))
+        node.setmocktime(int(time.time()))
+        node.bumpmocktime(MAX_GETDATA_INBOUND_WAIT)
+        wtxidrelay_on_peer.sync_with_ping()
+        assert_equal(wtxidrelay_on_peer.tx_getdata_count, 0)
+
+        # MSG_WTX INV from wtxidrelay=False peer -> mismatch, ignored
+        wtxidrelay_off_peer.send_and_ping(msg_inv([CInv(t=MSG_WTX, h=int(random_tx['wtxid'], 16))]))
+        node.bumpmocktime(MAX_GETDATA_INBOUND_WAIT)
+        wtxidrelay_off_peer.sync_with_ping()
+        assert_equal(wtxidrelay_off_peer.tx_getdata_count, 0)
+
+        # MSG_TX INV from wtxidrelay=False peer works
+        wtxidrelay_off_peer.send_and_ping(msg_inv([CInv(t=MSG_TX, h=int(random_tx['txid'], 16))]))
+        node.bumpmocktime(MAX_GETDATA_INBOUND_WAIT)
+        wtxidrelay_off_peer.wait_for_getdata([int(random_tx['txid'], 16)])
+
+        # MSG_WTX INV from wtxidrelay=True peer works
+        wtxidrelay_on_peer.send_and_ping(msg_inv([CInv(t=MSG_WTX, h=int(random_tx['wtxid'], 16))]))
+        node.bumpmocktime(MAX_GETDATA_INBOUND_WAIT)
+        wtxidrelay_on_peer.wait_for_getdata([int(random_tx['wtxid'], 16)])
+
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[0])
 
@@ -277,11 +455,14 @@ class TxDownloadTest(BitcoinTestFramework):
         self.test_expiry_fallback()
         self.test_disconnect_fallback()
         self.test_notfound_fallback()
-        self.test_preferred_inv()
-        self.test_preferred_inv(True)
+        self.test_preferred_tiebreaker_inv()
+        self.test_preferred_inv(ConnectionType.INBOUND)
+        self.test_preferred_inv(ConnectionType.OUTBOUND)
+        self.test_preferred_inv(ConnectionType.WHITELIST)
         self.test_txid_inv_delay()
         self.test_txid_inv_delay(True)
         self.test_large_inv_batch()
+        self.test_duplicate_tx_inv()
         self.test_spurious_notfound()
 
         # Run each test against new bitcoind instances, as setting mocktimes has long-term effects on when
@@ -291,6 +472,7 @@ class TxDownloadTest(BitcoinTestFramework):
             (self.test_inv_block, True),
             (self.test_tx_requests, True),
             (self.test_rejects_filter_reset, False),
+            (self.test_inv_wtxidrelay_mismatch, False),
         ]:
             self.stop_nodes()
             self.start_nodes()
@@ -303,7 +485,6 @@ class TxDownloadTest(BitcoinTestFramework):
                         self.peers.append(node.add_p2p_connection(TestP2PConn()))
                 self.log.info("Nodes are setup with {} incoming connections each".format(NUM_INBOUND))
             test()
-
 
 if __name__ == '__main__':
     TxDownloadTest(__file__).main()

@@ -6,19 +6,16 @@
 
 export LC_ALL=C.UTF-8
 
-export CI_IMAGE_NAME_TAG="docker.io/ubuntu:24.04"
-export CONTAINER_NAME=ci_native_fuzz_valgrind
-export PACKAGES="clang-16 llvm-16 libclang-rt-16-dev libevent-dev libboost-dev libsqlite3-dev valgrind"
+export CI_IMAGE_NAME_TAG="mirror.gcr.io/ubuntu:26.04"
+export PACKAGES="clang llvm libclang-rt-dev libboost-dev libsqlite3-dev valgrind libcapnp-dev capnproto"
 export NO_DEPENDS=1
 export RUN_UNIT_TESTS=false
 export RUN_FUNCTIONAL_TESTS=false
 export RUN_FUZZ_TESTS=true
 export FUZZ_TESTS_CONFIG="--valgrind"
-export GOAL="install"
-export BITCOIN_CONFIG="\
+export BUILD_TARGETS="all"
+printf -v BITCOIN_CONFIG "%q " \
  -DBUILD_FOR_FUZZING=ON \
- -DSANITIZERS=fuzzer \
- -DCMAKE_C_COMPILER=clang-16 \
- -DCMAKE_CXX_COMPILER=clang++-16 \
-"
-export LLVM_SYMBOLIZER_PATH="/usr/bin/llvm-symbolizer-16"
+ -DCMAKE_C_COMPILER=clang \
+ -DCMAKE_CXX_COMPILER=clang++
+export BITCOIN_CONFIG

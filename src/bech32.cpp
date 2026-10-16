@@ -1,5 +1,5 @@
 // Copyright (c) 2017, 2021 Pieter Wuille
-// Copyright (c) 2021-2022 The Bitcoin Core developers
+// Copyright (c) 2021-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -7,8 +7,7 @@
 #include <util/vector.h>
 
 #include <array>
-#include <assert.h>
-#include <numeric>
+#include <cassert>
 #include <optional>
 
 namespace bech32
@@ -364,7 +363,7 @@ std::string Encode(Encoding encoding, const std::string& hrp, const data& values
     std::string ret;
     ret.reserve(hrp.size() + 1 + values.size() + CHECKSUM_SIZE);
     ret += hrp;
-    ret += '1';
+    ret += SEPARATOR;
     for (const uint8_t& i : values) ret += CHARSET[i];
     for (const uint8_t& i : CreateChecksum(encoding, hrp, values)) ret += CHARSET[i];
     return ret;
@@ -374,7 +373,7 @@ std::string Encode(Encoding encoding, const std::string& hrp, const data& values
 DecodeResult Decode(const std::string& str, CharLimit limit) {
     std::vector<int> errors;
     if (!CheckCharacters(str, errors)) return {};
-    size_t pos = str.rfind('1');
+    size_t pos = str.rfind(SEPARATOR);
     if (str.size() > limit) return {};
     if (pos == str.npos || pos == 0 || pos + CHECKSUM_SIZE >= str.size()) {
         return {};
@@ -404,8 +403,7 @@ std::pair<std::string, std::vector<int>> LocateErrors(const std::string& str, Ch
     std::vector<int> error_locations{};
 
     if (str.size() > limit) {
-        error_locations.resize(str.size() - limit);
-        std::iota(error_locations.begin(), error_locations.end(), static_cast<int>(limit));
+        error_locations.push_back(static_cast<int>(limit));
         return std::make_pair("Bech32 string too long", std::move(error_locations));
     }
 
@@ -413,7 +411,7 @@ std::pair<std::string, std::vector<int>> LocateErrors(const std::string& str, Ch
         return std::make_pair("Invalid character or mixed case", std::move(error_locations));
     }
 
-    size_t pos = str.rfind('1');
+    size_t pos = str.rfind(SEPARATOR);
     if (pos == str.npos) {
         return std::make_pair("Missing separator", std::vector<int>{});
     }

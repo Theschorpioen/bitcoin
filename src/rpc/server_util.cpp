@@ -1,22 +1,29 @@
-// Copyright (c) 2021-2022 The Bitcoin Core developers
+// Copyright (c) 2021-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <rpc/server_util.h>
 
-#include <common/args.h>
-#include <net_processing.h>
+#include <chain.h>
 #include <node/context.h>
-#include <policy/fees.h>
+#include <node/miner.h>
+#include <pow.h>
+#include <primitives/block.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
-#include <txmempool.h>
+#include <uint256.h>
 #include <util/any.h>
-#include <validation.h>
 
 #include <any>
+#include <memory>
+#include <string>
+
+namespace Consensus {
+struct Params;
+} // namespace Consensus
 
 using node::NodeContext;
+using node::UpdateTime;
 
 NodeContext& EnsureAnyNodeContext(const std::any& context)
 {
@@ -80,17 +87,17 @@ ChainstateManager& EnsureAnyChainman(const std::any& context)
     return EnsureChainman(EnsureAnyNodeContext(context));
 }
 
-CBlockPolicyEstimator& EnsureFeeEstimator(const NodeContext& node)
+FeeRateEstimatorManager& EnsureFeeEstimatorMan(const NodeContext& node)
 {
-    if (!node.fee_estimator) {
+    if (!node.fee_estimator_man) {
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Fee estimation disabled");
     }
-    return *node.fee_estimator;
+    return *node.fee_estimator_man;
 }
 
-CBlockPolicyEstimator& EnsureAnyFeeEstimator(const std::any& context)
+FeeRateEstimatorManager& EnsureAnyFeeEstimatorMan(const std::any& context)
 {
-    return EnsureFeeEstimator(EnsureAnyNodeContext(context));
+    return EnsureFeeEstimatorMan(EnsureAnyNodeContext(context));
 }
 
 CConnman& EnsureConnman(const NodeContext& node)
@@ -101,12 +108,12 @@ CConnman& EnsureConnman(const NodeContext& node)
     return *node.connman;
 }
 
-interfaces::Mining& EnsureMining(const NodeContext& node)
+node::BlockTemplateManager& EnsureBlockTemplateManager(const NodeContext& node)
 {
-    if (!node.mining) {
-        throw JSONRPCError(RPC_INTERNAL_ERROR, "Node miner not found");
+    if (!node.block_template_manager) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "Block template manager not found");
     }
-    return *node.mining;
+    return *node.block_template_manager;
 }
 
 PeerManager& EnsurePeerman(const NodeContext& node)
@@ -128,4 +135,19 @@ AddrMan& EnsureAddrman(const NodeContext& node)
 AddrMan& EnsureAnyAddrman(const std::any& context)
 {
     return EnsureAddrman(EnsureAnyNodeContext(context));
+}
+
+void NextEmptyBlockIndex(CBlockIndex& tip, const Consensus::Params& consensusParams, CBlockIndex& next_index)
+{
+    CBlockHeader next_header{};
+    next_header.hashPrevBlock  = tip.GetBlockHash();
+    UpdateTime(&next_header, consensusParams, &tip);
+    next_header.nBits = GetNextWorkRequired(&tip, &next_header, consensusParams);
+    next_header.nNonce = 0;
+
+    next_index.pprev = &tip;
+    next_index.nTime = next_header.nTime;
+    next_index.nBits = next_header.nBits;
+    next_index.nNonce = next_header.nNonce;
+    next_index.nHeight = tip.nHeight + 1;
 }

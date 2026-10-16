@@ -11,6 +11,7 @@
 #include <uint256.h>
 #include <util/hash_type.h>
 
+#include <compare>
 #include <string>
 
 CScriptID::CScriptID(const CScript& in) : BaseHash(Hash160(in)) {}
@@ -151,9 +152,8 @@ std::string GetOpName(opcodetype opcode)
 
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
-    default:
-        return "OP_UNKNOWN";
-    }
+    } // no default case, so the compiler can warn about missing cases
+    return "OP_UNKNOWN";
 }
 
 unsigned int CScript::GetSigOpCount(bool fAccurate) const
@@ -235,6 +235,13 @@ bool CScript::IsPayToWitnessScriptHash() const
     // Extra-fast test for pay-to-witness-script-hash CScripts:
     return (this->size() == 34 &&
             (*this)[0] == OP_0 &&
+            (*this)[1] == 0x20);
+}
+
+bool CScript::IsPayToTaproot() const
+{
+    return (this->size() == 34 &&
+            (*this)[0] == OP_1 &&
             (*this)[1] == 0x20);
 }
 

@@ -1,12 +1,13 @@
-// Copyright (c) 2012-2022 The Bitcoin Core developers
+// Copyright (c) 2012-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <addrman.h>
+#include <bip324.h>
 #include <chainparams.h>
 #include <clientversion.h>
 #include <common/args.h>
 #include <compat/compat.h>
-#include <cstdint>
 #include <net.h>
 #include <net_processing.h>
 #include <netaddress.h>
@@ -16,6 +17,8 @@
 #include <serialize.h>
 #include <span.h>
 #include <streams.h>
+#include <test/util/common.h>
+#include <test/util/net.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
@@ -26,6 +29,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <ios>
 #include <memory>
 #include <optional>
@@ -67,7 +71,8 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
                                                             CAddress(),
                                                             pszDest,
                                                             ConnectionType::OUTBOUND_FULL_RELAY,
-                                                            /*inbound_onion=*/false);
+                                                            /*inbound_onion=*/false,
+                                                            /*network_key=*/0);
     BOOST_CHECK(pnode1->IsFullOutboundConn() == true);
     BOOST_CHECK(pnode1->IsManualConn() == false);
     BOOST_CHECK(pnode1->IsBlockOnlyConn() == false);
@@ -85,7 +90,8 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
                                                             CAddress(),
                                                             pszDest,
                                                             ConnectionType::INBOUND,
-                                                            /*inbound_onion=*/false);
+                                                            /*inbound_onion=*/false,
+                                                            /*network_key=*/1);
     BOOST_CHECK(pnode2->IsFullOutboundConn() == false);
     BOOST_CHECK(pnode2->IsManualConn() == false);
     BOOST_CHECK(pnode2->IsBlockOnlyConn() == false);
@@ -103,7 +109,8 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
                                                             CAddress(),
                                                             pszDest,
                                                             ConnectionType::OUTBOUND_FULL_RELAY,
-                                                            /*inbound_onion=*/false);
+                                                            /*inbound_onion=*/false,
+                                                            /*network_key=*/2);
     BOOST_CHECK(pnode3->IsFullOutboundConn() == true);
     BOOST_CHECK(pnode3->IsManualConn() == false);
     BOOST_CHECK(pnode3->IsBlockOnlyConn() == false);
@@ -121,7 +128,8 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
                                                             CAddress(),
                                                             pszDest,
                                                             ConnectionType::INBOUND,
-                                                            /*inbound_onion=*/true);
+                                                            /*inbound_onion=*/true,
+                                                            /*network_key=*/3);
     BOOST_CHECK(pnode4->IsFullOutboundConn() == false);
     BOOST_CHECK(pnode4->IsManualConn() == false);
     BOOST_CHECK(pnode4->IsBlockOnlyConn() == false);
@@ -194,13 +202,6 @@ BOOST_AUTO_TEST_CASE(cnetaddr_basic)
     BOOST_CHECK(!addr.IsBindAny());
     BOOST_CHECK_EQUAL(addr.ToStringAddr(), scoped_addr);
 
-    // Test that the delimiter "%" and default zone id of 0 can be omitted for the default scope.
-    addr = LookupHost(link_local + "%0", false).value();
-    BOOST_REQUIRE(addr.IsValid());
-    BOOST_REQUIRE(addr.IsIPv6());
-    BOOST_CHECK(!addr.IsBindAny());
-    BOOST_CHECK_EQUAL(addr.ToStringAddr(), link_local);
-
     // TORv2, no longer supported
     BOOST_CHECK(!addr.SetSpecial("6hzph5hv6337r6p2.onion"));
 
@@ -252,8 +253,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_basic)
     BOOST_CHECK(!addr.SetSpecial("udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v\0wtf.b32.i2p"s));
 
     // I2P, valid but unsupported (56 Base32 characters)
-    // See "Encrypted LS with Base 32 Addresses" in
-    // https://geti2p.net/spec/encryptedleaseset.txt
+    // See https://i2p.net/en/docs/specs/b32encrypted
     BOOST_CHECK(
         !addr.SetSpecial("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscsad.b32.i2p"));
 
@@ -620,7 +620,8 @@ BOOST_AUTO_TEST_CASE(ipv4_peer_with_ipv6_addrMe_test)
                                                            CAddress{},
                                                            /*pszDest=*/std::string{},
                                                            ConnectionType::OUTBOUND_FULL_RELAY,
-                                                           /*inbound_onion=*/false);
+                                                           /*inbound_onion=*/false,
+                                                           /*network_key=*/0);
     pnode->fSuccessfullyConnected.store(true);
 
     // the peer claims to be reaching us via IPv6
@@ -671,10 +672,11 @@ BOOST_AUTO_TEST_CASE(get_local_addr_for_peer_port)
                    /*addrIn=*/CAddress{CService{peer_out_in_addr, 8333}, NODE_NETWORK},
                    /*nKeyedNetGroupIn=*/0,
                    /*nLocalHostNonceIn=*/0,
-                   /*addrBindIn=*/CAddress{},
+                   /*addrBindIn=*/CService{},
                    /*addrNameIn=*/std::string{},
                    /*conn_type_in=*/ConnectionType::OUTBOUND_FULL_RELAY,
-                   /*inbound_onion=*/false};
+                   /*inbound_onion=*/false,
+                   /*network_key=*/0};
     peer_out.fSuccessfullyConnected = true;
     peer_out.SetAddrLocal(peer_us);
 
@@ -692,10 +694,11 @@ BOOST_AUTO_TEST_CASE(get_local_addr_for_peer_port)
                   /*addrIn=*/CAddress{CService{peer_in_in_addr, 8333}, NODE_NETWORK},
                   /*nKeyedNetGroupIn=*/0,
                   /*nLocalHostNonceIn=*/0,
-                  /*addrBindIn=*/CAddress{},
+                  /*addrBindIn=*/CService{},
                   /*addrNameIn=*/std::string{},
                   /*conn_type_in=*/ConnectionType::INBOUND,
-                  /*inbound_onion=*/false};
+                  /*inbound_onion=*/false,
+                  /*network_key=*/1};
     peer_in.fSuccessfullyConnected = true;
     peer_in.SetAddrLocal(peer_us);
 
@@ -799,9 +802,45 @@ BOOST_AUTO_TEST_CASE(LocalAddress_BasicLifecycle)
     BOOST_CHECK(!IsLocal(addr));
 }
 
+BOOST_AUTO_TEST_CASE(LocalAddress_nScore_Overflow)
+{
+    g_reachable_nets.Add(NET_IPV4);
+    const CService addr{UtilBuildAddress(0x002, 0x001, 0x001, 0x001), 1000}; // 2.1.1.1:1000
+
+    const auto get_score = [](const CService& service) -> int {
+        LOCK(g_maplocalhost_mutex);
+        const auto it = mapLocalHost.find(service);
+        return it != mapLocalHost.end() ? it->second.nScore : 0;
+    };
+
+    const int initial_score = 1000;
+    BOOST_REQUIRE(AddLocal(addr, initial_score));
+    BOOST_REQUIRE(IsLocal(addr));
+    BOOST_CHECK_EQUAL(get_score(addr), initial_score);
+
+    // SeenLocal should increment nScore by 1.
+    BOOST_CHECK(SeenLocal(addr));
+    BOOST_CHECK_EQUAL(get_score(addr), initial_score + 1);
+
+    // AddLocal() saturates nScore when updating an existing entry at INT_MAX.
+    BOOST_REQUIRE(AddLocal(addr, std::numeric_limits<int>::max()));
+    BOOST_CHECK_EQUAL(get_score(addr), std::numeric_limits<int>::max());
+
+    BOOST_CHECK(AddLocal(addr, std::numeric_limits<int>::max()));
+    BOOST_CHECK_EQUAL(get_score(addr), std::numeric_limits<int>::max());
+
+    // SeenLocal() also saturates at INT_MAX.
+    BOOST_CHECK(SeenLocal(addr));
+    BOOST_CHECK_EQUAL(get_score(addr), std::numeric_limits<int>::max());
+
+    RemoveLocal(addr);
+    BOOST_CHECK(!IsLocal(addr));
+}
+
 BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
 {
     LOCK(NetEventsInterface::g_msgproc_mutex);
+    auto& connman{static_cast<ConnmanTestMsg&>(*m_node.connman)};
 
     // Tests the following scenario:
     // * -bind=3.4.5.6:20001 is specified
@@ -814,7 +853,7 @@ BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
     // Pretend that we bound to this port.
     const uint16_t bind_port = 20001;
     m_node.args->ForceSetArg("-bind", strprintf("3.4.5.6:%u", bind_port));
-    m_node.args->ForceSetArg("-capturemessages", "1");
+    m_node.connman->SetCaptureMessages(true);
 
     // Our address:port as seen from the peer - 2.3.4.5:20002 (different from the above).
     in_addr peer_us_addr;
@@ -829,10 +868,11 @@ BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
                /*addrIn=*/CAddress{CService{peer_in_addr, 8333}, NODE_NETWORK},
                /*nKeyedNetGroupIn=*/0,
                /*nLocalHostNonceIn=*/0,
-               /*addrBindIn=*/CAddress{},
+               /*addrBindIn=*/CService{},
                /*addrNameIn=*/std::string{},
                /*conn_type_in=*/ConnectionType::OUTBOUND_FULL_RELAY,
-               /*inbound_onion=*/false};
+               /*inbound_onion=*/false,
+               /*network_key=*/2};
 
     const uint64_t services{NODE_NETWORK | NODE_WITNESS};
     const int64_t time{0};
@@ -844,22 +884,24 @@ BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
 
     m_node.peerman->InitializeNode(peer, NODE_NETWORK);
 
-    std::atomic<bool> interrupt_dummy{false};
-    std::chrono::microseconds time_received_dummy{0};
+    m_node.peerman->SendMessages(peer);
+    connman.FlushSendBuffer(peer); // Drop sent version message
 
-    const auto msg_version =
+    auto msg_version_receive =
         NetMsg::Make(NetMsgType::VERSION, PROTOCOL_VERSION, services, time, services, CAddress::V1_NETWORK(peer_us));
-    DataStream msg_version_stream{msg_version.data};
+    Assert(connman.ReceiveMsgFrom(peer, std::move(msg_version_receive)));
+    peer.fPauseSend = false;
+    bool more_work{connman.ProcessMessagesOnce(peer)};
+    Assert(!more_work);
 
-    m_node.peerman->ProcessMessage(
-        peer, NetMsgType::VERSION, msg_version_stream, time_received_dummy, interrupt_dummy);
+    m_node.peerman->SendMessages(peer);
+    connman.FlushSendBuffer(peer); // Drop sent verack message
 
-    const auto msg_verack = NetMsg::Make(NetMsgType::VERACK);
-    DataStream msg_verack_stream{msg_verack.data};
-
+    Assert(connman.ReceiveMsgFrom(peer, NetMsg::Make(NetMsgType::VERACK)));
+    peer.fPauseSend = false;
     // Will set peer.fSuccessfullyConnected to true (necessary in SendMessages()).
-    m_node.peerman->ProcessMessage(
-        peer, NetMsgType::VERACK, msg_verack_stream, time_received_dummy, interrupt_dummy);
+    more_work = connman.ProcessMessagesOnce(peer);
+    Assert(!more_work);
 
     // Ensure that peer_us_addr:bind_port is sent to the peer.
     const CService expected{peer_us_addr, bind_port};
@@ -868,13 +910,12 @@ BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
     const auto CaptureMessageOrig = CaptureMessage;
     CaptureMessage = [&sent, &expected](const CAddress& addr,
                                         const std::string& msg_type,
-                                        Span<const unsigned char> data,
+                                        std::span<const unsigned char> data,
                                         bool is_incoming) -> void {
         if (!is_incoming && msg_type == "addr") {
-            DataStream s{data};
             std::vector<CAddress> addresses;
 
-            s >> CAddress::V1_NETWORK(addresses);
+            SpanReader{data} >> CAddress::V1_NETWORK(addresses);
 
             for (const auto& addr : addresses) {
                 if (addr == expected) {
@@ -885,13 +926,13 @@ BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
         }
     };
 
-    m_node.peerman->SendMessages(&peer);
+    m_node.peerman->SendMessages(peer);
 
     BOOST_CHECK(sent);
 
     CaptureMessage = CaptureMessageOrig;
     chainman.ResetIbd();
-    m_node.args->ForceSetArg("-capturemessages", "0");
+    m_node.connman->SetCaptureMessages(false);
     m_node.args->ForceSetArg("-bind", "");
 }
 
@@ -907,7 +948,8 @@ BOOST_AUTO_TEST_CASE(advertise_local_address)
                                        CAddress{},
                                        /*pszDest=*/std::string{},
                                        ConnectionType::OUTBOUND_FULL_RELAY,
-                                       /*inbound_onion=*/false);
+                                       /*inbound_onion=*/false,
+                                       /*network_key=*/0);
     };
     g_reachable_nets.Add(NET_CJDNS);
 
@@ -1061,7 +1103,7 @@ public:
             bool progress{false};
             // Send bytes from m_to_send to the transport.
             if (!m_to_send.empty()) {
-                Span<const uint8_t> to_send = Span{m_to_send}.first(1 + m_rng.randrange(m_to_send.size()));
+                std::span<const uint8_t> to_send = std::span{m_to_send}.first(1 + m_rng.randrange(m_to_send.size()));
                 size_t old_len = to_send.size();
                 if (!m_transport.ReceivedBytes(to_send)) {
                     return std::nullopt; // transport error occurred
@@ -1106,7 +1148,7 @@ public:
     BIP324Cipher& GetCipher() { return m_cipher; }
 
     /** Schedule bytes to be sent to the transport. */
-    void Send(Span<const uint8_t> data)
+    void Send(std::span<const uint8_t> data)
     {
         m_to_send.insert(m_to_send.end(), data.begin(), data.end());
     }
@@ -1121,13 +1163,13 @@ public:
     }
 
     /** Schedule bytes to be sent to the transport. */
-    void Send(Span<const std::byte> data) { Send(MakeUCharSpan(data)); }
+    void Send(std::span<const std::byte> data) { Send(MakeUCharSpan(data)); }
 
     /** Schedule our ellswift key to be sent to the transport. */
     void SendKey() { Send(m_cipher.GetOurPubKey()); }
 
     /** Schedule specified garbage to be sent to the transport. */
-    void SendGarbage(Span<const uint8_t> garbage)
+    void SendGarbage(std::span<const uint8_t> garbage)
     {
         // Remember the specified garbage (so we can use it as AAD).
         m_sent_garbage.assign(garbage.begin(), garbage.end());
@@ -1174,7 +1216,7 @@ public:
 
     /** Schedule an encrypted packet with specified content/aad/ignore to be sent to transport
      *  (only after ReceiveKey). */
-    void SendPacket(Span<const uint8_t> content, Span<const uint8_t> aad = {}, bool ignore = false)
+    void SendPacket(std::span<const uint8_t> content, std::span<const uint8_t> aad = {}, bool ignore = false)
     {
         // Use cipher to construct ciphertext.
         std::vector<std::byte> ciphertext;
@@ -1196,9 +1238,9 @@ public:
     }
 
     /** Schedule version packet to be sent to the transport (only after ReceiveKey). */
-    void SendVersion(Span<const uint8_t> version_data = {}, bool vers_ignore = false)
+    void SendVersion(std::span<const uint8_t> version_data = {}, bool vers_ignore = false)
     {
-        Span<const std::uint8_t> aad;
+        std::span<const std::uint8_t> aad;
         // Set AAD to garbage only for first packet.
         if (!m_sent_aad) aad = m_sent_garbage;
         SendPacket(/*content=*/version_data, /*aad=*/aad, /*ignore=*/vers_ignore);
@@ -1208,7 +1250,7 @@ public:
     /** Expect a packet to have been received from transport, process it, and return its contents
      *  (only after ReceiveKey). Decoys are skipped. Optional associated authenticated data (AAD) is
      *  expected in the first received packet, no matter if that is a decoy or not. */
-    std::vector<uint8_t> ReceivePacket(Span<const std::byte> aad = {})
+    std::vector<uint8_t> ReceivePacket(std::span<const std::byte> aad = {})
     {
         std::vector<uint8_t> contents;
         // Loop as long as there are ignored packets that are to be skipped.
@@ -1216,7 +1258,7 @@ public:
             // When processing a packet, at least enough bytes for its length descriptor must be received.
             BOOST_REQUIRE(m_received.size() >= BIP324Cipher::LENGTH_LEN);
             // Decrypt the content length.
-            size_t size = m_cipher.DecryptLength(MakeByteSpan(Span{m_received}.first(BIP324Cipher::LENGTH_LEN)));
+            size_t size = m_cipher.DecryptLength(MakeByteSpan(std::span{m_received}.first(BIP324Cipher::LENGTH_LEN)));
             // Check that the full packet is in the receive buffer.
             BOOST_REQUIRE(m_received.size() >= size + BIP324Cipher::EXPANSION);
             // Decrypt the packet contents.
@@ -1224,7 +1266,7 @@ public:
             bool ignore{false};
             bool ret = m_cipher.Decrypt(
                 /*input=*/MakeByteSpan(
-                    Span{m_received}.first(size + BIP324Cipher::EXPANSION).subspan(BIP324Cipher::LENGTH_LEN)),
+                    std::span{m_received}.first(size + BIP324Cipher::EXPANSION).subspan(BIP324Cipher::LENGTH_LEN)),
                 /*aad=*/aad,
                 /*ignore=*/ignore,
                 /*contents=*/MakeWritableByteSpan(contents));
@@ -1247,7 +1289,7 @@ public:
         size_t garblen;
         for (garblen = 0; garblen <= V2Transport::MAX_GARBAGE_LEN; ++garblen) {
             BOOST_REQUIRE(m_received.size() >= garblen + BIP324Cipher::GARBAGE_TERMINATOR_LEN);
-            auto term_span = MakeByteSpan(Span{m_received}.subspan(garblen, BIP324Cipher::GARBAGE_TERMINATOR_LEN));
+            auto term_span = MakeByteSpan(std::span{m_received}.subspan(garblen, BIP324Cipher::GARBAGE_TERMINATOR_LEN));
             if (std::ranges::equal(term_span, m_cipher.GetReceiveGarbageTerminator())) break;
         }
         // Copy the garbage to a buffer.
@@ -1268,17 +1310,17 @@ public:
 
     /** Expect application packet to have been received, with specified short id and payload.
      *  (only after ReceiveKey). */
-    void ReceiveMessage(uint8_t short_id, Span<const uint8_t> payload)
+    void ReceiveMessage(uint8_t short_id, std::span<const uint8_t> payload)
     {
         auto ret = ReceivePacket();
         BOOST_CHECK(ret.size() == payload.size() + 1);
         BOOST_CHECK(ret[0] == short_id);
-        BOOST_CHECK(std::ranges::equal(Span{ret}.subspan(1), payload));
+        BOOST_CHECK(std::ranges::equal(std::span{ret}.subspan(1), payload));
     }
 
     /** Expect application packet to have been received, with specified 12-char message type and
      *  payload (only after ReceiveKey). */
-    void ReceiveMessage(const std::string& m_type, Span<const uint8_t> payload)
+    void ReceiveMessage(const std::string& m_type, std::span<const uint8_t> payload)
     {
         auto ret = ReceivePacket();
         BOOST_REQUIRE(ret.size() == payload.size() + 1 + CMessageHeader::MESSAGE_TYPE_SIZE);
@@ -1290,16 +1332,16 @@ public:
                 BOOST_CHECK(ret[1 + i] == 0);
             }
         }
-        BOOST_CHECK(std::ranges::equal(Span{ret}.subspan(1 + CMessageHeader::MESSAGE_TYPE_SIZE), payload));
+        BOOST_CHECK(std::ranges::equal(std::span{ret}.subspan(1 + CMessageHeader::MESSAGE_TYPE_SIZE), payload));
     }
 
     /** Schedule an encrypted packet with specified message type and payload to be sent to
      *  transport (only after ReceiveKey). */
-    void SendMessage(std::string mtype, Span<const uint8_t> payload)
+    void SendMessage(std::string mtype, std::span<const uint8_t> payload)
     {
         // Construct contents consisting of 0x00 + 12-byte message type + payload.
         std::vector<uint8_t> contents(1 + CMessageHeader::MESSAGE_TYPE_SIZE + payload.size());
-        std::copy(mtype.begin(), mtype.end(), reinterpret_cast<char*>(contents.data() + 1));
+        std::copy(mtype.begin(), mtype.end(), contents.begin() + 1);
         std::copy(payload.begin(), payload.end(), contents.begin() + 1 + CMessageHeader::MESSAGE_TYPE_SIZE);
         // Send a packet with that as contents.
         SendPacket(contents);
@@ -1307,7 +1349,7 @@ public:
 
     /** Schedule an encrypted packet with specified short message id and payload to be sent to
      *  transport (only after ReceiveKey). */
-    void SendMessage(uint8_t short_id, Span<const uint8_t> payload)
+    void SendMessage(uint8_t short_id, std::span<const uint8_t> payload)
     {
         // Construct contents consisting of short_id + payload.
         std::vector<uint8_t> contents(1 + payload.size());
@@ -1340,14 +1382,16 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
     for (int i = 0; i < 10; ++i) {
         V2TransportTester tester(m_rng, true);
         auto ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.SendKey();
         tester.SendGarbage();
         tester.ReceiveKey();
         tester.SendGarbageTerm();
         tester.SendVersion();
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
         tester.CompareSessionIDs();
@@ -1356,11 +1400,25 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         tester.SendMessage(uint8_t(4), msg_data_1); // cmpctblock short id
         tester.SendMessage(0, {}); // Invalidly encoded message
         tester.SendMessage("tx", msg_data_2); // 12-character encoded message type
+        // Message type containing 0x7F (DEL): outside the printable-ASCII range
+        // accepted by the v1 transport, so must be rejected here as well.
+        tester.SendMessage(std::string{"t\x7f"}, msg_data_2);
+        // Message type containing 0x7E ('~'): at the boundary, still valid.
+        tester.SendMessage("t~", msg_data_2);
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->size() == 3);
-        BOOST_CHECK((*ret)[0] && (*ret)[0]->m_type == "cmpctblock" && std::ranges::equal((*ret)[0]->m_recv, MakeByteSpan(msg_data_1)));
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->size() == 5);
+        BOOST_REQUIRE((*ret)[0]);
+        BOOST_CHECK((*ret)[0]->m_type == "cmpctblock");
+        BOOST_CHECK(std::ranges::equal((*ret)[0]->m_recv, MakeByteSpan(msg_data_1)));
         BOOST_CHECK(!(*ret)[1]);
-        BOOST_CHECK((*ret)[2] && (*ret)[2]->m_type == "tx" && std::ranges::equal((*ret)[2]->m_recv, MakeByteSpan(msg_data_2)));
+        BOOST_REQUIRE((*ret)[2]);
+        BOOST_CHECK((*ret)[2]->m_type == "tx");
+        BOOST_CHECK(std::ranges::equal((*ret)[2]->m_recv, MakeByteSpan(msg_data_2)));
+        BOOST_CHECK(!(*ret)[3]);
+        BOOST_REQUIRE((*ret)[4]);
+        BOOST_CHECK((*ret)[4]->m_type == "t~");
+        BOOST_CHECK(std::ranges::equal((*ret)[4]->m_recv, MakeByteSpan(msg_data_2)));
 
         // Then send a message with a bit error, expecting failure. It's possible this failure does
         // not occur immediately (when the length descriptor was modified), but it should come
@@ -1383,12 +1441,14 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         tester.SendKey();
         tester.SendGarbage();
         auto ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.ReceiveKey();
         tester.SendGarbageTerm();
         tester.SendVersion();
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
         tester.CompareSessionIDs();
@@ -1397,9 +1457,14 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         tester.SendMessage(uint8_t(14), msg_data_1); // inv short id
         tester.SendMessage(uint8_t(19), msg_data_2); // pong short id
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->size() == 2);
-        BOOST_CHECK((*ret)[0] && (*ret)[0]->m_type == "inv" && std::ranges::equal((*ret)[0]->m_recv, MakeByteSpan(msg_data_1)));
-        BOOST_CHECK((*ret)[1] && (*ret)[1]->m_type == "pong" && std::ranges::equal((*ret)[1]->m_recv, MakeByteSpan(msg_data_2)));
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->size() == 2);
+        BOOST_REQUIRE((*ret)[0]);
+        BOOST_CHECK((*ret)[0]->m_type == "inv");
+        BOOST_CHECK(std::ranges::equal((*ret)[0]->m_recv, MakeByteSpan(msg_data_1)));
+        BOOST_REQUIRE((*ret)[1]);
+        BOOST_CHECK((*ret)[1]->m_type == "pong");
+        BOOST_CHECK(std::ranges::equal((*ret)[1]->m_recv, MakeByteSpan(msg_data_2)));
 
         // Then send a too-large message.
         auto msg_data_3 = m_rng.randbytes<uint8_t>(4005000);
@@ -1428,7 +1493,8 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
             tester.SendGarbage(garb_len);
         }
         auto ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         if (!send_immediately) {
             tester.SendKey();
             tester.SendGarbage(garb_len);
@@ -1442,7 +1508,8 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         }
         tester.SendVersion(ver_data, false);
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
         tester.CompareSessionIDs();
@@ -1463,11 +1530,18 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         tester.SendMessage("foobar", {}); // test receiving unknown message type
         tester.AddMessage("barfoo", {}); // test sending unknown message type
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->size() == 4);
-        BOOST_CHECK((*ret)[0] && (*ret)[0]->m_type == "addrv2" && std::ranges::equal((*ret)[0]->m_recv, MakeByteSpan(msg_data_1)));
-        BOOST_CHECK((*ret)[1] && (*ret)[1]->m_type == "headers" && std::ranges::equal((*ret)[1]->m_recv, MakeByteSpan(msg_data_2)));
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->size() == 4);
+        BOOST_REQUIRE((*ret)[0]);
+        BOOST_CHECK((*ret)[0]->m_type == "addrv2");
+        BOOST_CHECK(std::ranges::equal((*ret)[0]->m_recv, MakeByteSpan(msg_data_1)));
+        BOOST_REQUIRE((*ret)[1]);
+        BOOST_CHECK((*ret)[1]->m_type == "headers");
+        BOOST_CHECK(std::ranges::equal((*ret)[1]->m_recv, MakeByteSpan(msg_data_2)));
         BOOST_CHECK(!(*ret)[2]);
-        BOOST_CHECK((*ret)[3] && (*ret)[3]->m_type == "foobar" && (*ret)[3]->m_recv.empty());
+        BOOST_REQUIRE((*ret)[3]);
+        BOOST_CHECK((*ret)[3]->m_type == "foobar");
+        BOOST_CHECK((*ret)[3]->m_recv.empty());
         tester.ReceiveMessage("barfoo", {});
     }
 
@@ -1475,7 +1549,8 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
     {
         V2TransportTester tester(m_rng, true);
         auto ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.SendKey();
         tester.SendGarbage(V2Transport::MAX_GARBAGE_LEN + 1);
         tester.ReceiveKey();
@@ -1490,7 +1565,8 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         tester.SendKey();
         tester.SendGarbage(V2Transport::MAX_GARBAGE_LEN + 1);
         auto ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.ReceiveKey();
         tester.SendGarbageTerm();
         ret = tester.Interact();
@@ -1501,7 +1577,8 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
     {
         V2TransportTester tester(m_rng, true);
         auto ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.SendKey();
         tester.ReceiveKey();
         /** The number of random garbage bytes before the included first 15 bytes of terminator. */
@@ -1520,19 +1597,23 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         tester.SendGarbageTerm();
         tester.SendVersion();
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->empty());
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
         tester.CompareSessionIDs();
         auto msg_data_1 = m_rng.randbytes<uint8_t>(4000000); // test that receiving 4M payload works
         auto msg_data_2 = m_rng.randbytes<uint8_t>(4000000); // test that sending 4M payload works
-        tester.SendMessage(uint8_t(m_rng.randrange(223) + 33), {}); // unknown short id
+        tester.SendMessage(uint8_t(m_rng.randrange(256 - BIP324_SHORTIDS_IMPLEMENTED) + BIP324_SHORTIDS_IMPLEMENTED), {}); // unknown short id
         tester.SendMessage(uint8_t(2), msg_data_1); // "block" short id
         tester.AddMessage("blocktxn", msg_data_2); // schedule blocktxn to be sent to us
         ret = tester.Interact();
-        BOOST_REQUIRE(ret && ret->size() == 2);
+        BOOST_REQUIRE(ret);
+        BOOST_REQUIRE(ret->size() == 2);
         BOOST_CHECK(!(*ret)[0]);
-        BOOST_CHECK((*ret)[1] && (*ret)[1]->m_type == "block" && std::ranges::equal((*ret)[1]->m_recv, MakeByteSpan(msg_data_1)));
+        BOOST_REQUIRE((*ret)[1]);
+        BOOST_CHECK((*ret)[1]->m_type == "block");
+        BOOST_CHECK(std::ranges::equal((*ret)[1]->m_recv, MakeByteSpan(msg_data_1)));
         tester.ReceiveMessage(uint8_t(3), msg_data_2); // "blocktxn" short id
     }
 
@@ -1551,6 +1632,107 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         auto ret = tester.Interact();
         BOOST_CHECK(!ret);
     }
+}
+
+BOOST_AUTO_TEST_CASE(version_message_min_peer_proto_version)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    auto& connman{static_cast<ConnmanTestMsg&>(*m_node.connman)};
+
+    // Peers below MIN_PEER_PROTO_VERSION are disconnected, peers at it are not.
+    for (const bool too_old : {true, false}) {
+        CNode node{/*id=*/0,
+                   /*sock=*/nullptr,
+                   /*addrIn=*/CAddress{},
+                   /*nKeyedNetGroupIn=*/0,
+                   /*nLocalHostNonceIn=*/0,
+                   /*addrBindIn=*/CService{},
+                   /*addrNameIn=*/"",
+                   /*conn_type_in=*/ConnectionType::INBOUND,
+                   /*inbound_onion=*/false,
+                   /*network_key=*/0};
+        connman.Handshake(node,
+                          /*successfully_connected=*/false,
+                          /*remote_services=*/NODE_NETWORK,
+                          /*local_services=*/NODE_NONE,
+                          /*version=*/MIN_PEER_PROTO_VERSION - (too_old ? 1 : 0),
+                          /*relay_txs=*/true);
+        BOOST_CHECK_EQUAL(node.fDisconnect.load(), too_old);
+        m_node.peerman->FinalizeNode(node);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(private_broadcast_version_does_not_update_addrman_services)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+
+    const CNetAddr source{LookupHost("2.3.4.5", /*fAllowLookup=*/false).value()};
+    const CAddress addr{Lookup("1.2.3.4", 8333, /*fAllowLookup=*/false).value(), NODE_NONE};
+    BOOST_REQUIRE(m_node.addrman->Add({addr}, source));
+    CNode node{/*id=*/0,
+               /*sock=*/nullptr,
+               /*addrIn=*/addr,
+               /*nKeyedNetGroupIn=*/0,
+               /*nLocalHostNonceIn=*/0,
+               /*addrBindIn=*/CService{},
+               /*addrNameIn=*/"",
+               /*conn_type_in=*/ConnectionType::PRIVATE_BROADCAST,
+               /*inbound_onion=*/false,
+               /*network_key=*/0};
+
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    connman.Handshake(node,
+                      /*successfully_connected=*/false,
+                      /*remote_services=*/NODE_NETWORK,
+                      /*local_services=*/NODE_NONE,
+                      /*version=*/PROTOCOL_VERSION,
+                      /*relay_txs=*/true);
+
+    BOOST_CHECK_EQUAL(m_node.addrman->Select().first.nServices, NODE_NONE);
+    m_node.peerman->FinalizeNode(node);
+}
+
+BOOST_AUTO_TEST_CASE(addlocal_onlynet_externalip)
+{
+    // Test that `-externalip` addresses bypass `-onlynet`, but score alone does
+    // not.
+
+    CAddress addr_onion;
+    BOOST_REQUIRE(addr_onion.SetSpecial("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"));
+    BOOST_REQUIRE(addr_onion.IsValid());
+    BOOST_REQUIRE(addr_onion.IsTor());
+
+    const auto reachable_nets_at_start{g_reachable_nets.All()};
+    const bool discover_orig{fDiscover};
+
+    // Simulate using -onlynet=ipv4 -externalip=<onion>
+    g_reachable_nets.RemoveAll();
+    g_reachable_nets.Add(NET_IPV4);
+    fDiscover = false;
+
+    // Now AddLocal with a non-manual score should fail for an unreachable network.
+    BOOST_CHECK(!AddLocal(addr_onion, LOCAL_BIND));
+    BOOST_CHECK(!IsLocal(addr_onion));
+
+    BOOST_CHECK(!AddLocal(addr_onion, LOCAL_MANUAL));
+    BOOST_CHECK(!IsLocal(addr_onion));
+
+    // Whereas AddLocal for -externalip should succeed.
+    BOOST_CHECK(AddLocal(addr_onion, LOCAL_MANUAL, /*add_even_if_unreachable=*/true));
+    BOOST_CHECK(IsLocal(addr_onion));
+
+    // Normal AddLocal on a reachable network still works.
+    const CNetAddr addr_ipv4{LookupHost("1.2.3.4", false).value()};
+    BOOST_CHECK(AddLocal(addr_ipv4, LOCAL_MANUAL));
+    BOOST_CHECK(IsLocal(CService{addr_ipv4, GetListenPort()}));
+
+    RemoveLocal(CService{addr_ipv4, GetListenPort()});
+    RemoveLocal(addr_onion);
+    g_reachable_nets.RemoveAll();
+    for (const auto& net : reachable_nets_at_start) {
+        g_reachable_nets.Add(net);
+    }
+    fDiscover = discover_orig;
 }
 
 BOOST_AUTO_TEST_SUITE_END()

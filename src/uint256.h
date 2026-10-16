@@ -7,6 +7,7 @@
 #define BITCOIN_UINT256_H
 
 #include <crypto/common.h>
+#include <crypto/hex_base.h>
 #include <span.h>
 #include <util/strencodings.h>
 #include <util/string.h>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <compare>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -37,7 +39,7 @@ public:
     /* constructor for constants between 1 and 255 */
     constexpr explicit base_blob(uint8_t v) : m_data{v} {}
 
-    constexpr explicit base_blob(Span<const unsigned char> vch)
+    constexpr explicit base_blob(std::span<const unsigned char> vch)
     {
         assert(vch.size() == WIDTH);
         std::copy(vch.begin(), vch.end(), m_data.begin());
@@ -57,23 +59,21 @@ public:
         std::fill(m_data.begin(), m_data.end(), 0);
     }
 
+    constexpr bool operator==(const base_blob&) const = default;
+
     /** Lexicographic ordering
      * @note Does NOT match the ordering on the corresponding \ref
      *       base_uint::CompareTo, which starts comparing from the end.
      */
-    constexpr int Compare(const base_blob& other) const { return std::memcmp(m_data.data(), other.m_data.data(), WIDTH); }
-
-    friend constexpr bool operator==(const base_blob& a, const base_blob& b) { return a.Compare(b) == 0; }
-    friend constexpr bool operator!=(const base_blob& a, const base_blob& b) { return a.Compare(b) != 0; }
-    friend constexpr bool operator<(const base_blob& a, const base_blob& b) { return a.Compare(b) < 0; }
+    constexpr std::strong_ordering operator<=>(const base_blob& other) const = default;
 
     /** @name Hex representation
      *
-     * The hex representation used by GetHex(), ToString(), FromHex() and
-     * SetHexDeprecated() is unusual, since it shows bytes of the base_blob in
-     * reverse order. For example, a 4-byte blob {0x12, 0x34, 0x56, 0x78} is
-     * represented as "78563412" instead of the more typical "12345678"
-     * representation that would be shown in a hex editor or used by typical
+     * The hex representation used by GetHex(), ToString(), and FromHex()
+     * is unusual, since it shows bytes of the base_blob in reverse order.
+     * For example, a 4-byte blob {0x12, 0x34, 0x56, 0x78} is represented
+     * as "78563412" instead of the more typical "12345678" representation
+     * that would be shown in a hex editor or used by typical
      * byte-array / hex conversion functions like python's bytes.hex() and
      * bytes.fromhex().
      *
@@ -92,20 +92,6 @@ public:
      *
      * @{*/
     std::string GetHex() const;
-    /** Unlike FromHex this accepts any invalid input, thus it is fragile and deprecated!
-     *
-     * - Hex numbers that don't specify enough bytes to fill the internal array
-     *   will be treated as setting the beginning of it, which corresponds to
-     *   the least significant bytes when converted to base_uint.
-     *
-     * - Hex numbers specifying too many bytes will have the numerically most
-     *   significant bytes (the beginning of the string) narrowed away.
-     *
-     * - An odd count of hex digits will result in the high bits of the leftmost
-     *   byte being zero.
-     *   "0x123" => {0x23, 0x1, 0x0, ..., 0x0}
-     */
-    void SetHexDeprecated(std::string_view str);
     std::string ToString() const;
     /**@}*/
 
@@ -125,7 +111,7 @@ public:
     template<typename Stream>
     void Serialize(Stream& s) const
     {
-        s << Span(m_data);
+        s << std::span(m_data);
     }
 
     template<typename Stream>
@@ -158,7 +144,16 @@ std::optional<uintN_t> FromHex(std::string_view str)
 {
     if (uintN_t::size() * 2 != str.size() || !IsHex(str)) return std::nullopt;
     uintN_t rv;
-    rv.SetHexDeprecated(str);
+    unsigned char* p1 = rv.begin();
+    unsigned char* pend = rv.end();
+    size_t digits = str.size();
+    while (digits > 0 && p1 < pend) {
+        *p1 = ::HexDigit(str[--digits]);
+        if (digits > 0) {
+            *p1 |= ((unsigned char)::HexDigit(str[--digits]) << 4);
+            p1++;
+        }
+    }
     return rv;
 }
 /**
@@ -190,7 +185,7 @@ class uint160 : public base_blob<160> {
 public:
     static std::optional<uint160> FromHex(std::string_view str) { return detail::FromHex<uint160>(str); }
     constexpr uint160() = default;
-    constexpr explicit uint160(Span<const unsigned char> vch) : base_blob<160>(vch) {}
+    constexpr explicit uint160(std::span<const unsigned char> vch) : base_blob<160>(vch) {}
 };
 
 /** 256-bit opaque blob.
@@ -205,7 +200,7 @@ public:
     constexpr uint256() = default;
     consteval explicit uint256(std::string_view hex_str) : base_blob<256>(hex_str) {}
     constexpr explicit uint256(uint8_t v) : base_blob<256>(v) {}
-    constexpr explicit uint256(Span<const unsigned char> vch) : base_blob<256>(vch) {}
+    constexpr explicit uint256(std::span<const unsigned char> vch) : base_blob<256>(vch) {}
     static const uint256 ZERO;
     static const uint256 ONE;
 };

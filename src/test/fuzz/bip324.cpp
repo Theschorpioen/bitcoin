@@ -1,4 +1,4 @@
-// Copyright (c) 2023 The Bitcoin Core developers
+// Copyright (c) 2023-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -64,7 +64,7 @@ FUZZ_TARGET(bip324_cipher_roundtrip, .init=Initialize)
     assert(std::ranges::equal(initiator.GetSendGarbageTerminator(), responder.GetReceiveGarbageTerminator()));
     assert(std::ranges::equal(initiator.GetReceiveGarbageTerminator(), responder.GetSendGarbageTerminator()));
 
-    LIMITED_WHILE(provider.remaining_bytes(), 1000) {
+    LIMITED_WHILE (provider.remaining_bytes(), 1000) {
         // Mode:
         // - Bit 0: whether the ignore bit is set in message
         // - Bit 1: whether the responder (0) or initiator (1) sends
@@ -106,7 +106,7 @@ FUZZ_TARGET(bip324_cipher_roundtrip, .init=Initialize)
         }
 
         // Decrypt length
-        uint32_t dec_length = receiver.DecryptLength(Span{ciphertext}.first(initiator.LENGTH_LEN));
+        uint32_t dec_length = receiver.DecryptLength(std::span{ciphertext}.first(initiator.LENGTH_LEN));
         if (!damage) {
             assert(dec_length == length);
         } else {
@@ -119,7 +119,7 @@ FUZZ_TARGET(bip324_cipher_roundtrip, .init=Initialize)
         // Decrypt
         std::vector<std::byte> decrypt(dec_length);
         bool dec_ignore{false};
-        bool ok = receiver.Decrypt(Span{ciphertext}.subspan(initiator.LENGTH_LEN), aad, dec_ignore, decrypt);
+        bool ok = receiver.Decrypt(std::span{ciphertext}.subspan(initiator.LENGTH_LEN), aad, dec_ignore, decrypt);
         // Decryption *must* fail if the packet was damaged, and succeed if it wasn't.
         assert(!ok == damage);
         if (!ok) break;

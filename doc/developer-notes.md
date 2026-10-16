@@ -1,56 +1,6 @@
-Developer Notes
-===============
+# Developer Notes
 
-<!-- markdown-toc start -->
-**Table of Contents**
-
-- [Developer Notes](#developer-notes)
-    - [Coding Style (General)](#coding-style-general)
-    - [Coding Style (C++)](#coding-style-c)
-    - [Coding Style (Python)](#coding-style-python)
-    - [Coding Style (Doxygen-compatible comments)](#coding-style-doxygen-compatible-comments)
-      - [Generating Documentation](#generating-documentation)
-    - [Development tips and tricks](#development-tips-and-tricks)
-        - [Compiling for debugging](#compiling-for-debugging)
-        - [Show sources in debugging](#show-sources-in-debugging)
-        - [`debug.log`](#debuglog)
-        - [Signet, testnet, and regtest modes](#signet-testnet-and-regtest-modes)
-        - [DEBUG_LOCKORDER](#debug_lockorder)
-        - [DEBUG_LOCKCONTENTION](#debug_lockcontention)
-        - [Valgrind suppressions file](#valgrind-suppressions-file)
-        - [Compiling for test coverage](#compiling-for-test-coverage)
-        - [Performance profiling with perf](#performance-profiling-with-perf)
-        - [Sanitizers](#sanitizers)
-    - [Locking/mutex usage notes](#lockingmutex-usage-notes)
-    - [Threads](#threads)
-    - [Ignoring IDE/editor files](#ignoring-ideeditor-files)
-- [Development guidelines](#development-guidelines)
-    - [General Bitcoin Core](#general-bitcoin-core)
-    - [Wallet](#wallet)
-    - [General C++](#general-c)
-    - [C++ data structures](#c-data-structures)
-    - [Strings and formatting](#strings-and-formatting)
-    - [Shadowing](#shadowing)
-    - [Lifetimebound](#lifetimebound)
-    - [Threads and synchronization](#threads-and-synchronization)
-    - [Scripts](#scripts)
-        - [Shebang](#shebang)
-    - [Source code organization](#source-code-organization)
-    - [GUI](#gui)
-    - [Subtrees](#subtrees)
-    - [Upgrading LevelDB](#upgrading-leveldb)
-      - [File Descriptor Counts](#file-descriptor-counts)
-      - [Consensus Compatibility](#consensus-compatibility)
-    - [Scripted diffs](#scripted-diffs)
-        - [Suggestions and examples](#suggestions-and-examples)
-    - [Release notes](#release-notes)
-    - [RPC interface guidelines](#rpc-interface-guidelines)
-    - [Internal interface guidelines](#internal-interface-guidelines)
-
-<!-- markdown-toc end -->
-
-Coding Style (General)
-----------------------
+## Coding Style (General)
 
 Various coding styles have been used during the history of the codebase,
 and the result is not very consistent. However, we're now trying to converge to
@@ -60,18 +10,17 @@ commits.
 
 Do not submit patches solely to modify the style of existing code.
 
-Coding Style (C++)
-------------------
+## Coding Style (C++)
 
 - **Indentation and whitespace rules** as specified in
 [src/.clang-format](/src/.clang-format). You can use the provided
 [clang-format-diff script](/contrib/devtools/README.md#clang-format-diffpy)
 tool to clean up patches automatically before submission.
   - Braces on new lines for classes, functions, methods.
-  - Braces on the same line for everything else.
+  - Braces on the same line for everything else (including structs).
   - 4 space indentation (no tabs) for every block except namespaces.
   - No indentation for `public`/`protected`/`private` or for `namespace`.
-  - No extra spaces inside parenthesis; don't do `( this )`.
+  - No extra spaces inside parentheses; don't do `( this )`.
   - No space after function names; one space after `if`, `for` and `while`.
   - If an `if` only has a single-statement `then`-clause, it can appear
     on the same line as the `if`, without braces. In every other case,
@@ -91,10 +40,10 @@ code.
     - Class member variables have a `m_` prefix.
     - Global variables have a `g_` prefix.
   - Constant names are all uppercase, and use `_` to separate words.
-  - Enumerator constants may be `snake_case`, `PascalCase` or `ALL_CAPS`.
-    This is a more tolerant policy than the [C++ Core
-    Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Renum-caps),
-    which recommend using `snake_case`.  Please use what seems appropriate.
+  - Enumerator constants may be `snake_case`, or `PascalCase`. They should not
+    be `ALL_CAPS`, according to the [C++ Core
+    Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#renum-caps),
+    to avoid clashing with macros.
   - Class names, function names, and method names are UpperCamelCase
     (PascalCase). Do not prefix class names with `C`. See [Internal interface
     naming style](#internal-interface-naming-style) for an exception to this
@@ -106,16 +55,13 @@ code.
 
 - **Miscellaneous**
   - `++i` is preferred over `i++`.
-  - `nullptr` is preferred over `NULL` or `(void*)0`.
   - `static_assert` is preferred over `assert` where possible. Generally; compile-time checking is preferred over run-time checking.
   - Use a named cast or functional cast, not a C-Style cast. When casting
     between integer types, use functional casts such as `int(x)` or `int{x}`
     instead of `(int) x`. When casting between more complex types, use `static_cast`.
     Use `reinterpret_cast` and `const_cast` as appropriate.
-  - Prefer [`list initialization ({})`](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Res-list) where possible.
+  - Prefer [`list initialization ({})`](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#res-list) where possible.
     For example `int x{0};` instead of `int x = 0;` or `int x(0);`
-  - Recursion is checked by clang-tidy and thus must be made explicit. Use
-    `NOLINTNEXTLINE(misc-no-recursion)` to suppress the check.
 
 For function calls a namespace should be specified explicitly, unless such functions have been declared within it.
 Otherwise, [argument-dependent lookup](https://en.cppreference.com/w/cpp/language/adl), also known as ADL, could be
@@ -171,8 +117,7 @@ public:
 } // namespace foo
 ```
 
-Coding Style (C++ functions and methods)
---------------------
+### Coding Style (C++ functions and methods)
 
 - When ordering function parameters, place input parameters first, then any
   in-out parameters, followed by any output parameters.
@@ -192,8 +137,18 @@ Coding Style (C++ functions and methods)
   non-optional in-out and output parameters should usually be references, as
   they cannot be null.
 
-Coding Style (C++ named arguments)
-------------------------------
+### Coding Style (clang-tidy rules)
+
+The clang-tidy tool is used to check some rules. Please refer to the [upstream
+documentation](https://clang.llvm.org/extra/clang-tidy/checks/list.html) about
+the details and rationale for each rule.
+
+#### C++ Recursive Functions
+
+Recursion is checked by clang-tidy and thus must be made explicit. Use
+`NOLINTNEXTLINE(misc-no-recursion)` to suppress the check.
+
+#### C++ named arguments
 
 When passing named arguments, use a format that clang-tidy understands. The
 argument names can otherwise not be verified by clang-tidy.
@@ -209,7 +164,7 @@ int main()
 }
 ```
 
-### Running clang-tidy
+#### Running clang-tidy
 
 To run clang-tidy on Ubuntu/Debian, install the dependencies:
 
@@ -217,20 +172,26 @@ To run clang-tidy on Ubuntu/Debian, install the dependencies:
 apt install clang-tidy clang
 ```
 
-Configure with clang as the compiler:
+Configure with clang as the compiler with the below command that should create a `compile_commands.json` file within the build directory:
 
 ```sh
 cmake -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build build -j $(nproc)
 ```
 
 The output is denoised of errors from external dependencies.
 
-To run clang-tidy on all source files:
+To run clang-tidy on all source files using the checks mentioned in the `./src/.clang-tidy` file:
 
 ```sh
 ( cd ./src/ && run-clang-tidy -p ../build -j $(nproc) )
 ```
+
+To run clang-tidy on one file:
+```sh
+( cd ./src/ && run-clang-tidy -p ../build -j $(nproc) ./path/to/single_file.cpp )
+```
+
+Optionally, append the `run-clang-tidy` command with the `-quiet` option to suppress printing of statistics and ignored warnings that can clutter the output. The `-fix` option also comes in handy to apply the fixes suggested by the tool but need to ensure that unrelated changes in the file are not committed.
 
 To run clang-tidy on the changed source lines:
 
@@ -238,14 +199,7 @@ To run clang-tidy on the changed source lines:
 git diff | ( cd ./src/ && clang-tidy-diff -p2 -path ../build -j $(nproc) )
 ```
 
-Coding Style (Python)
----------------------
-
-Refer to [/test/functional/README.md#style-guidelines](/test/functional/README.md#style-guidelines).
-
-
-Coding Style (Doxygen-compatible comments)
-------------------------------------------
+## Coding Style (Doxygen-compatible comments)
 
 Bitcoin Core uses [Doxygen](https://www.doxygen.nl/) to generate its official documentation.
 
@@ -282,16 +236,15 @@ To describe a class, use the same construct above the class definition:
 class CAlert
 ```
 
-To describe a member or variable use:
+To describe a member or variable, place the comment on the line(s) before it, using `/**` and `*/`, `//!`, or `///`:
 ```c++
 //! Description before the member
 int var;
 ```
 
-or
-```c++
-int var; //!< Description after the member
-```
+Avoid trailing (inline) member comments like `int var; //!< Description after the member`.
+
+  - *Rationale*: Forgetting the `<` silently breaks Doxygen output.
 
 Also OK:
 ```c++
@@ -320,7 +273,7 @@ but the above styles are favored.
 
 Recommendations:
 
-- Avoiding duplicating type and input/output information in function
+- Avoid duplicating type and input/output information in function
   descriptions.
 
 - Use backticks (&#96;&#96;) to refer to `argument` names in function and
@@ -349,8 +302,11 @@ Linux: `sudo apt install doxygen graphviz`
 
 MacOS: `brew install doxygen graphviz`
 
-Development tips and tricks
----------------------------
+## Coding Style (Python)
+
+Refer to [/test/functional/README.md#style-guidelines](/test/functional/README.md#style-guidelines).
+
+## Development tips and tricks
 
 ### Compiling for debugging
 
@@ -363,38 +319,7 @@ If you need to build exclusively for debugging, set the `-DCMAKE_BUILD_TYPE`
 to `Debug` (i.e. `-DCMAKE_BUILD_TYPE=Debug`). You can always check the cmake
 build options of an existing build with `ccmake build`.
 
-### Show sources in debugging
-
-If you have ccache enabled, absolute paths are stripped from debug information
-with the `-fdebug-prefix-map` and `-fmacro-prefix-map` options (if supported by the
-compiler). This might break source file detection in case you move binaries
-after compilation, debug from the directory other than the project root or use
-an IDE that only supports absolute paths for debugging (e.g. it won't stop at breakpoints).
-
-There are a few possible fixes:
-
-1. Configure source file mapping.
-
-For `gdb` create or append to [`.gdbinit` file](https://sourceware.org/gdb/current/onlinedocs/gdb#gdbinit-man):
-```
-set substitute-path ./src /path/to/project/root/src
-```
-
-For `lldb` create or append to [`.lldbinit` file](https://lldb.llvm.org/man/lldb.html#configuration-files):
-```
-settings set target.source-map ./src /path/to/project/root/src
-```
-
-2. Add a symlink to the `./src` directory:
-```
-ln -s /path/to/project/root/src src
-```
-
-3. Use `debugedit` to modify debug information in the binary.
-
-4. If your IDE has an option for this, change your breakpoints to use the file name only.
-
-### `debug.log`
+### debug.log
 
 If the code is behaving strangely, take a look in the `debug.log` file in the data directory;
 error and debugging messages are written there.
@@ -410,7 +335,7 @@ to see it.
 ### Signet, testnet, and regtest modes
 
 If you are testing multi-machine code that needs to operate across the internet,
-you can run with either the `-signet` or the `-testnet` config option to test
+you can run with either the `-signet` or the `-testnet4` config option to test
 with "play bitcoins" on a test network.
 
 If you are testing something that can run on one machine, run with the
@@ -432,8 +357,8 @@ RPC that, when enabled, logs the location and duration of each lock contention
 to the `debug.log` file.
 
 The `-DCMAKE_BUILD_TYPE=Debug` build option adds `-DDEBUG_LOCKCONTENTION` to the
-compiler flags. You may also enable it manually by building with `-DDEBUG_LOCKCONTENTION` added to your CPPFLAGS,
-i.e. `CPPFLAGS="-DDEBUG_LOCKCONTENTION"`, then build and run bitcoind.
+compiler flags. You may also enable it manually by building with `-DDEBUG_LOCKCONTENTION`
+added to your CPPFLAGS, i.e. `-DAPPEND_CPPFLAGS="-DDEBUG_LOCKCONTENTION"`.
 
 You can then use the `-debug=lock` configuration option at bitcoind startup or
 `bitcoin-cli logging '["lock"]'` at runtime to turn on lock contention logging.
@@ -460,29 +385,18 @@ other input.
   safely continue even if the assumption is violated. In debug builds it
   behaves like `Assert`/`assert` to notify developers and testers about
   nonfatal errors. In production it doesn't warn or log anything, though the
-  expression is always evaluated.
+  expression is always evaluated. However, if the compiler can prove that
+  an expression inside `Assume` is side-effect-free, it may optimize the call away,
+  skipping its evaluation in production. This enables a lower-cost way of
+  making explicit statements about the code, aiding review.
    - For example it can be assumed that a variable is only initialized once,
      but a failed assumption does not result in a fatal bug. A failed
      assumption may or may not result in a slightly degraded user experience,
      but it is safe to continue program execution.
 
-### Valgrind suppressions file
-
-Valgrind is a programming tool for memory debugging, memory leak detection, and
-profiling. The repo contains a Valgrind suppressions file
-([`valgrind.supp`](https://github.com/bitcoin/bitcoin/blob/master/contrib/valgrind.supp))
-which includes known Valgrind warnings in our dependencies that cannot be fixed
-in-tree. Example use:
-
-```shell
-$ valgrind --suppressions=contrib/valgrind.supp build/src/test/test_bitcoin
-$ valgrind --suppressions=contrib/valgrind.supp --leak-check=full \
-      --show-leak-kinds=all build/src/test/test_bitcoin --log_level=test_suite
-$ valgrind -v --leak-check=full build/src/bitcoind -printtoconsole
-$ ./build/test/functional/test_runner.py --valgrind
-```
-
 ### Compiling for test coverage
+
+#### Using LCOV
 
 LCOV can be used to generate a test coverage report based upon `ctest`
 execution. LCOV must be installed on your system (e.g. the `lcov` package
@@ -513,13 +427,143 @@ To enable test parallelism:
 cmake -DJOBS=$(nproc) -P build/Coverage.cmake
 ```
 
+#### Using LLVM/Clang toolchain
+
+The following generates a coverage report for unit tests and functional tests.
+
+Configure the build with the following flags:
+
+> Consider building with a clean state using `rm -rf build`
+
+```shell
+# MacOS may instead require `-DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang" -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++"`
+cmake -B build -DCMAKE_C_COMPILER="clang" \
+   -DCMAKE_CXX_COMPILER="clang++" \
+   -DAPPEND_CFLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+   -DAPPEND_CXXFLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+   -DAPPEND_LDFLAGS="-fprofile-instr-generate -fcoverage-mapping"
+cmake --build build # Append "-j N" here for N parallel jobs.
+```
+
+Generating the raw profile data based on `ctest` and functional tests execution:
+
+```shell
+# Create directory for raw profile data
+mkdir -p build/raw_profile_data
+
+# Run tests to generate profiles
+LLVM_PROFILE_FILE="$(pwd)/build/raw_profile_data/%m_%p.profraw" ctest --test-dir build # Append "-j N" here for N parallel jobs.
+LLVM_PROFILE_FILE="$(pwd)/build/raw_profile_data/%m_%p.profraw" build/test/functional/test_runner.py # Append "-j N" here for N parallel jobs
+
+# Merge all the raw profile data into a single file
+find build/raw_profile_data -name "*.profraw" > build/raw_profile_data_files.txt
+llvm-profdata merge -f build/raw_profile_data_files.txt -o build/coverage.profdata
+```
+
+> **Note:** The "counter mismatch" warning can be safely ignored, though it can be resolved by updating to Clang 19.
+> The warning occurs due to version mismatches but doesn't affect the coverage report generation.
+
+Generating the coverage report:
+
+```shell
+llvm-cov show \
+    --object=build/bin/test_bitcoin \
+    --object=build/bin/bitcoind \
+    -Xdemangler=llvm-cxxfilt \
+    --instr-profile=build/coverage.profdata \
+    --ignore-filename-regex="src/crc32c/|src/leveldb/|src/minisketch/|src/secp256k1/|src/test/" \
+    --format=html \
+    --show-instantiation-summary \
+    --show-line-counts-or-regions \
+    --show-expansions \
+    --output-dir=build/coverage_report \
+    --project-title="Bitcoin Core Coverage Report"
+```
+
+> **Note:** The "functions have mismatched data" warning can be safely ignored, the coverage report will still be generated correctly despite this warning.
+> This warning occurs due to profdata mismatch created during the merge process for shared libraries.
+
+The generated coverage report can be accessed at `build/coverage_report/index.html`.
+
+#### Compiling for Fuzz Coverage
+
+```shell
+cmake -B build \
+   -DCMAKE_C_COMPILER="clang" \
+   -DCMAKE_CXX_COMPILER="clang++" \
+   -DCMAKE_C_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+   -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+   -DBUILD_FOR_FUZZING=ON
+cmake --build build # Append "-j N" here for N parallel jobs.
+```
+
+Running fuzz tests with one or more targets
+
+```shell
+# For single target run with the target of choice
+LLVM_PROFILE_FILE="$(pwd)/build/raw_profile_data/txorphan.profraw" ./build/test/fuzz/test_runner.py ../qa-assets/fuzz_corpora txorphan
+# If running for multiple targets
+LLVM_PROFILE_FILE="$(pwd)/build/raw_profile_data/%m_%p.profraw" ./build/test/fuzz/test_runner.py ../qa-assets/fuzz_corpora
+# Merge profiles
+llvm-profdata merge build/raw_profile_data/*.profraw -o build/coverage.profdata
+```
+
+Generate report:
+
+```shell
+llvm-cov show \
+    --object=build/bin/fuzz \
+    -Xdemangler=llvm-cxxfilt \
+    --instr-profile=build/coverage.profdata \
+    --ignore-filename-regex="src/crc32c/|src/leveldb/|src/minisketch/|src/secp256k1/|src/test/" \
+    --format=html \
+    --show-instantiation-summary \
+    --show-line-counts-or-regions \
+    --show-expansions \
+    --output-dir=build/coverage_report \
+    --project-title="Bitcoin Core Fuzz Coverage Report"
+```
+
+The generated coverage report can be accessed at `build/coverage_report/index.html`.
+
+### Using IWYU
+
+The [`include-what-you-use`](https://github.com/include-what-you-use/include-what-you-use) tool (IWYU)
+helps to enforce the source code organization [policy](#source-code-organization) in this repository.
+
+To reproduce the IWYU CI job locally, run:
+```bash
+env -i HOME="$HOME" PATH="$PATH" USER="$USER" MAKEJOBS="-j1" FILE_ENV="./ci/test/00_setup_env_native_iwyu.sh" ./ci/test_run_all.sh || echo "IWYU failed"
+```
+
+In some cases, IWYU might suggest headers that seem unnecessary at first glance, but are actually required.
+For example, a macro may use a symbol that requires its own include. Another example is passing a string literal
+to a function that accepts a `std::string` parameter. An implicit conversion occurs at the callsite using the
+`std::string` constructor, which makes the corresponding header required. We accept these suggestions as is.
+
+If the provided IWYU CI job still produces a false positive, reduce it to a minimal reproducer and report it upstream.
+
+Use IWYU pragmas sparingly.
+
+Use `IWYU pragma: keep` only as a narrow workaround when needed.
+
+Use `IWYU pragma: associated` only when IWYU cannot infer the intended associated header.
+
+Use `IWYU pragma: export` very sparingly, as this enforces transitive inclusion of headers and undermines the specific purpose of IWYU.
+
+The acceptable cases for using `IWYU pragma: export` are:
+1. Facade headers. For example, see [`compat/compat.h`](/src/compat/compat.h).
+2. Drop-in replacement headers. For example, see [`util/time.h`](/src/util/time.h).
+3. Presenting a complete interface across multiple headers.
+
+For IWYU pragmas, prefer adding a nearby source comment that explains why the annotation is needed.
+
 ### Performance profiling with perf
 
 Profiling is a good way to get a precise idea of where time is being spent in
 code. One tool for doing profiling on Linux platforms is called
-[`perf`](https://www.brendangregg.com/perf.html), and has been integrated into
-the functional test framework. Perf can observe a running process and sample
-(at some frequency) where its execution is.
+[`perf`](https://www.brendangregg.com/perf.html). It can observe a running
+process and sample (at some frequency) where its execution is.
 
 Perf installation is contingent on which kernel version you're running; see
 [this thread](https://askubuntu.com/questions/50145/how-to-install-perf-monitoring-tool)
@@ -554,8 +598,21 @@ perf report --stdio | c++filt | less
 
 or using a graphical tool like [Hotspot](https://github.com/KDAB/hotspot).
 
-See the functional test documentation for how to invoke perf within tests.
+### Valgrind
 
+Valgrind is a programming tool for memory debugging, memory leak detection, and
+profiling. The repo contains a Valgrind suppressions file
+([`valgrind.supp`](/test/sanitizer_suppressions/valgrind.supp))
+which includes known Valgrind warnings in our dependencies that cannot be fixed
+in-tree. Example use:
+
+```shell
+$ valgrind --suppressions=test/sanitizer_suppressions/valgrind.supp build/bin/test_bitcoin
+$ valgrind --suppressions=test/sanitizer_suppressions/valgrind.supp --leak-check=full \
+      --show-leak-kinds=all build/bin/test_bitcoin --log_level=test_suite
+$ valgrind -v --leak-check=full build/bin/bitcoind -printtoconsole
+$ ./build/test/functional/test_runner.py --valgrind
+```
 
 ### Sanitizers
 
@@ -577,23 +634,15 @@ cmake -B build -DSANITIZERS=address,undefined
 cmake -B build -DSANITIZERS=thread
 ```
 
-If you are compiling with GCC you will typically need to install corresponding
-"san" libraries to actually compile with these flags, e.g. libasan for the
-address sanitizer, libtsan for the thread sanitizer, and libubsan for the
-undefined sanitizer. If you are missing required libraries, the build
-will fail with a linker error when testing the sanitizer flags.
-
 The test suite should pass cleanly with the `thread` and `undefined` sanitizers. You
-may need to use a suppressions file, see `test/sanitizer_suppressions`. They may be
-used as follows:
+may use `build/test/with_sanitizer_env.py` to apply the project's default
+sanitizer options and suppressions:
 ```bash
-export LSAN_OPTIONS="suppressions=$(pwd)/test/sanitizer_suppressions/lsan"
-export TSAN_OPTIONS="suppressions=$(pwd)/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1"
-export UBSAN_OPTIONS="suppressions=$(pwd)/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1"
+build/test/with_sanitizer_env.py ctest --test-dir build
 ```
 
-See the CI config for more examples, and upstream documentation for more information
-about any additional options.
+Any sanitizer option set in the environment takes precedence over the default, e.g.
+`ASAN_OPTIONS=detect_leaks=0 build/test/with_sanitizer_env.py ctest --test-dir build`.
 
 Not all sanitizer options can be enabled at the same time, e.g. trying to build
 with `-DSANITIZERS=address,thread` will fail in the build as
@@ -611,8 +660,41 @@ Additional resources:
  * [GCC Instrumentation Options](https://gcc.gnu.org/onlinedocs/gcc/Instrumentation-Options.html)
  * [Google Sanitizers Wiki](https://github.com/google/sanitizers/wiki)
 
-Locking/mutex usage notes
--------------------------
+# Development guidelines
+
+A few non-style-related recommendations for developers, as well as points to
+pay attention to for reviewers of Bitcoin Core code.
+
+## General Testing
+
+As a rule of thumb, an externally observable change (new feature, bug fix, or
+changed default) should be accompanied by an automated test.
+New tests are usually not needed for behavior-preserving work that is easy to
+validate, such as moving code, renaming, or mechanical refactors.
+When an automated test would be brittle or have limited long-term value,
+a manual testing guide in the commit message or PR description is an
+acceptable alternative.
+
+### Commit Structure for Tests
+
+Test placement depends on existing coverage and the type of change:
+
+* When existing tests already cover the behavior being changed, update them in
+  the same commit as the change. The diff records the old and new expectations
+  together and shows the change was intentional.
+* For a simple feature or bug fix without existing coverage, the change and its
+  test can often be in the same commit.
+* For a non-trivial refactor, if the relevant invariant is not already covered
+  by automated tests, first add that coverage in a separate test commit. The
+  refactor commit should not need to update test expectations.
+* For a non-trivial change to existing behavior without coverage, consider
+  adding a preceding commit with a [characterization test](https://en.wikipedia.org/wiki/Characterization_test)
+  to document the current behavior. Mark assertions whose expected values will
+  change with `TODO` comments so they are not mistaken for intended behavior.
+  Remove the comments when updating those assertions in the behavior-changing
+  commit.
+
+## Locking/mutex usage notes
 
 The code is multi-threaded and uses mutexes and the
 `LOCK` and `TRY_LOCK` macros to protect data structures.
@@ -628,117 +710,67 @@ between the various components is a goal, with any necessary locking
 done by the components (e.g. see the self-contained `FillableSigningProvider` class
 and its `cs_KeyStore` lock for example).
 
-Threads
--------
+## Threads
 
-- [Main thread (`bitcoind`)](https://doxygen.bitcoincore.org/bitcoind_8cpp.html#a0ddf1224851353fc92bfbff6f499fa97)
+- [Main thread (`bitcoind`)](https://doxygen.bitcoincore.org/bitcoind_8cpp.html#main)
   : Started from `main()` in `bitcoind.cpp`. Responsible for starting up and
   shutting down the application.
 
-- [Init load (`b-initload`)](https://doxygen.bitcoincore.org/namespacenode.html#ab4305679079866f0f420f7dbf278381d)
+- [Init load (`b-initload`)](https://doxygen.bitcoincore.org/init_8cpp.html#initload)
   : Performs various loading tasks that are part of init but shouldn't block the node from being started: external block import,
    reindex, reindex-chainstate, main chain activation, spawn indexes background sync threads and mempool load.
 
-- [CCheckQueue::Loop (`b-scriptch.x`)](https://doxygen.bitcoincore.org/class_c_check_queue.html#a6e7fa51d3a25e7cb65446d4b50e6a987)
+- [CCheckQueue::Loop (`b-scriptch.xx`)](https://doxygen.bitcoincore.org/class_c_check_queue.html#checkqueue)
   : Parallel script validation threads for transactions in blocks.
 
-- [ThreadHTTP (`b-http`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#abb9f6ea8819672bd9a62d3695070709c)
-  : Libevent thread to listen for RPC and REST connections.
+- [ThreadHTTP (`b-http`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#http)
+  : Thread to listen for RPC and REST connections.
 
-- [HTTP worker threads(`b-httpworker.x`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#aa6a7bc27265043bc0193220c5ae3a55f)
+- [HTTP worker threads (`b-http.xx`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#http_pool)
   : Threads to service RPC and REST requests.
 
-- [Indexer threads (`b-txindex`, etc)](https://doxygen.bitcoincore.org/class_base_index.html#a96a7407421fbf877509248bbe64f8d87)
+- [Indexer threads (`b-txidx`, `b-blkfltbscidx`, `b-coinstatsidx`, `b-txospenderidx`)](https://doxygen.bitcoincore.org/class_base_index.html#index_sync)
   : One thread per indexer.
 
-- [SchedulerThread (`b-scheduler`)](https://doxygen.bitcoincore.org/class_c_scheduler.html#a14d2800815da93577858ea078aed1fba)
+- [SchedulerThread (`b-scheduler`)](https://doxygen.bitcoincore.org/class_c_scheduler.html#scheduler)
   : Does asynchronous background tasks like dumping wallet contents, dumping
   addrman and running asynchronous validationinterface callbacks.
 
-- [TorControlThread (`b-torcontrol`)](https://doxygen.bitcoincore.org/torcontrol_8cpp.html#a52a3efff23634500bb42c6474f306091)
-  : Libevent thread for tor connections.
+- [TorControlThread (`b-torcontrol`)](https://doxygen.bitcoincore.org/class_tor_controller.html#torcontrol)
+  : Thread for tor connections.
 
 - Net threads:
 
-  - [ThreadMessageHandler (`b-msghand`)](https://doxygen.bitcoincore.org/class_c_connman.html#aacdbb7148575a31bb33bc345e2bf22a9)
+  - [ThreadMessageHandler (`b-msghand`)](https://doxygen.bitcoincore.org/class_c_connman.html#msghand)
     : Application level message handling (sending and receiving). Almost
     all net_processing and validation logic runs on this thread.
 
-  - [ThreadDNSAddressSeed (`b-dnsseed`)](https://doxygen.bitcoincore.org/class_c_connman.html#aa7c6970ed98a4a7bafbc071d24897d13)
+  - [ThreadDNSAddressSeed (`b-dnsseed`)](https://doxygen.bitcoincore.org/class_c_connman.html#dnsseed)
     : Loads addresses of peers from the DNS.
 
-  - ThreadMapPort (`b-mapport`)
+  - [ThreadMapPort (`b-mapport`)](https://doxygen.bitcoincore.org/mapport_8cpp.html#mapport)
     : Universal plug-and-play startup/shutdown.
 
-  - [ThreadSocketHandler (`b-net`)](https://doxygen.bitcoincore.org/class_c_connman.html#a765597cbfe99c083d8fa3d61bb464e34)
+  - [ThreadSocketHandler (`b-net`)](https://doxygen.bitcoincore.org/class_c_connman.html#net)
     : Sends/Receives data from peers on port 8333.
 
-  - [ThreadOpenAddedConnections (`b-addcon`)](https://doxygen.bitcoincore.org/class_c_connman.html#a0b787caf95e52a346a2b31a580d60a62)
+  - [ThreadOpenAddedConnections (`b-addcon`)](https://doxygen.bitcoincore.org/class_c_connman.html#addcon)
     : Opens network connections to added nodes.
 
-  - [ThreadOpenConnections (`b-opencon`)](https://doxygen.bitcoincore.org/class_c_connman.html#a55e9feafc3bab78e5c9d408c207faa45)
+  - [ThreadOpenConnections (`b-opencon`)](https://doxygen.bitcoincore.org/class_c_connman.html#opencon)
     : Initiates new connections to peers.
 
-  - [ThreadI2PAcceptIncoming (`b-i2paccept`)](https://doxygen.bitcoincore.org/class_c_connman.html#a57787b4f9ac847d24065fbb0dd6e70f8)
+  - [ThreadI2PAcceptIncoming (`b-i2paccept`)](https://doxygen.bitcoincore.org/class_c_connman.html#i2paccept)
     : Listens for and accepts incoming I2P connections through the I2P SAM proxy.
 
-Ignoring IDE/editor files
---------------------------
-
-In closed-source environments in which everyone uses the same IDE, it is common
-to add temporary files it produces to the project-wide `.gitignore` file.
-
-However, in open source software such as Bitcoin Core, where everyone uses
-their own editors/IDE/tools, it is less common. Only you know what files your
-editor produces and this may change from version to version. The canonical way
-to do this is thus to create your local gitignore. Add this to `~/.gitconfig`:
-
-```
-[core]
-        excludesfile = /home/.../.gitignore_global
-```
-
-(alternatively, type the command `git config --global core.excludesfile ~/.gitignore_global`
-on a terminal)
-
-Then put your favourite tool's temporary filenames in that file, e.g.
-```
-# NetBeans
-nbproject/
-```
-
-Another option is to create a per-repository excludes file `.git/info/exclude`.
-These are not committed but apply only to one repository.
-
-If a set of tools is used by the build system or scripts the repository (for
-example, lcov) it is perfectly acceptable to add its files to `.gitignore`
-and commit them.
-
-Development guidelines
-============================
-
-A few non-style-related recommendations for developers, as well as points to
-pay attention to for reviewers of Bitcoin Core code.
-
-General Bitcoin Core
-----------------------
+## General Bitcoin Core
 
 - New features should be exposed on RPC first, then can be made available in the GUI.
 
   - *Rationale*: RPC allows for better automatic testing. The test suite for
     the GUI is very limited.
 
-- Make sure pull requests pass CI before merging.
-
-  - *Rationale*: Makes sure that they pass thorough testing, and that the tester will keep passing
-     on the master branch. Otherwise, all new pull requests will start failing the tests, resulting in
-     confusion and mayhem.
-
-  - *Explanation*: If the test suite is to be updated for a change, this has to
-    be done first.
-
-Logging
--------
+## Logging
 
 The macros `LogInfo`, `LogDebug`, `LogTrace`, `LogWarning` and `LogError` are available for
 logging messages. They should be used as follows:
@@ -747,14 +779,12 @@ logging messages. They should be used as follows:
   most of the time, and it should be used for log messages that are
   useful for debugging and can reasonably be enabled on a production
   system (that has sufficient free storage space). They will be logged
-  if the program is started with `-debug=category` or `-debug=1`.
+  if the program is started with `-debug=category` or `-debug=1`, or
+  the category is enabled through the `logging` RPC.
 
 - `LogInfo(fmt, params...)` should only be used rarely, e.g. for startup
   messages or for infrequent and important events such as a new block tip
-  being found or a new outbound connection being made. These log messages
-  are unconditional, so care must be taken that they can't be used by an
-  attacker to fill up storage. Note that `LogPrintf(fmt, params...)` is
-  a deprecated alias for `LogInfo`.
+  being found or a new outbound connection being made.
 
 - `LogError(fmt, params...)` should be used in place of `LogInfo` for
   severe problems that require the node (or a subsystem) to shut down
@@ -764,6 +794,11 @@ logging messages. They should be used as follows:
   severe problems that the node admin should address, but are not
   severe enough to warrant shutting down the node (e.g., system time
   appears to be wrong, unknown soft fork appears to have activated).
+
+- `LogWarnThenDebug(BCLog::CATEGORY, fmt, params...)` should be used
+  for errors that indicate a systematic problem that should be addressed
+  (and thus warrant a warning) but are likely to occur frequently if they
+  occur at all, so later occurrences are demoted to debug level.
 
 - `LogTrace(BCLog::CATEGORY, fmt, params...)` should be used in place of
   `LogDebug` for log messages that would be unusable on a production
@@ -776,13 +811,14 @@ Note that the format strings and parameters of `LogDebug` and `LogTrace`
 are only evaluated if the logging category is enabled, so you must be
 careful to avoid side-effects in those expressions.
 
-Wallet
--------
+While `LogInfo`, `LogWarning` and `LogError` messages should be rare,
+in case there are circumstances where they are not, those messages
+are automatically rate-limited to prevent potential disk-filling
+attacks. For the cases where this protection is undesirable,
+rate-limiting can be avoided with the `util::log::NO_RATE_LIMIT` tag, eg
+`LogInfo(util::log::NO_RATE_LIMIT, "UpdateTip: new best=%s ...",...)`.
 
-- Make sure that no crashes happen with run-time option `-disablewallet`.
-
-General C++
--------------
+## General C++
 
 For general C++ guidelines, you may refer to the [C++ Core
 Guidelines](https://isocpp.github.io/CppCoreGuidelines/).
@@ -790,7 +826,7 @@ Guidelines](https://isocpp.github.io/CppCoreGuidelines/).
 Common misconceptions are clarified in those sections:
 
 - Passing (non-)fundamental types in the [C++ Core
-  Guideline](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Rf-conventional).
+  Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#rf-conventional).
 
 - If you use the `.h`, you must link the `.cpp`.
 
@@ -803,8 +839,7 @@ Common misconceptions are clarified in those sections:
 
   - *Rationale*: This avoids memory and resource leaks, and ensures exception safety.
 
-C++ data structures
---------------------
+## C++ data structures
 
 - Never use the `std::map []` syntax when reading from a map, but instead use `.find()`.
 
@@ -815,7 +850,7 @@ C++ data structures
 - Do not compare an iterator from one data structure with an iterator of
   another data structure (even if of the same type).
 
-  - *Rationale*: Behavior is undefined. In C++ parlor this means "may reformat
+  - *Rationale*: Behavior is undefined. In C++ parlance this means "may reformat
     the universe", in practice this has resulted in at least one hard-to-debug crash bug.
 
 - Watch out for out-of-bounds vector access. `&vch[vch.size()]` is illegal,
@@ -856,14 +891,14 @@ class A
   - *Rationale*: Easier to understand what is happening, thus easier to spot mistakes, even for those
   that are not language lawyers.
 
-- Use `Span` as function argument when it can operate on any range-like container.
+- Use `std::span` as function argument when it can operate on any range-like container.
 
   - *Rationale*: Compared to `Foo(const vector<int>&)` this avoids the need for a (potentially expensive)
     conversion to vector if the caller happens to have the input stored in another type of container.
     However, be aware of the pitfalls documented in [span.h](../src/span.h).
 
 ```cpp
-void Foo(Span<const int> data);
+void Foo(std::span<const int> data);
 
 std::vector<int> vec{1,2,3};
 Foo(vec);
@@ -879,26 +914,25 @@ Foo(vec);
 enum class Tabs {
     info,
     console,
-    network_graph,
-    peers
 };
 
 int GetInt(Tabs tab)
 {
-    switch (tab) {
-    case Tabs::info: return 0;
-    case Tabs::console: return 1;
-    case Tabs::network_graph: return 2;
-    case Tabs::peers: return 3;
-    } // no default case, so the compiler can warn about missing cases
-    assert(false);
+    int ret = [&]() {
+        switch (tab) {
+        case Tabs::info: return 0;
+        case Tabs::console: return 1;
+        } // no default case, so the compiler can warn about missing cases
+        assert(false);
+    }();
+    LogInfo("Tab %s", ret);
+    return ret;
 }
 ```
 
 *Rationale*: The comment documents skipping `default:` label, and it complies with `clang-format` rules. The assertion prevents firing of `-Wreturn-type` warning on some compilers.
 
-Strings and formatting
-------------------------
+## Strings and formatting
 
 - Use `std::string`, avoid C string manipulation functions.
 
@@ -906,39 +940,7 @@ Strings and formatting
     buffer overflows, and surprises with `\0` characters. Also, some C string manipulations
     tend to act differently depending on platform, or even the user locale.
 
-- Use `ToIntegral` from [`strencodings.h`](/src/util/strencodings.h) for number parsing. In legacy code you might also find `ParseInt*` family of functions, `ParseDouble` or `LocaleIndependentAtoi`.
-
-  - *Rationale*: These functions do overflow checking and avoid pesky locale issues.
-
-- Avoid using locale dependent functions if possible. You can use the provided
-  [`lint-locale-dependence.py`](/test/lint/lint-locale-dependence.py)
-  to check for accidental use of locale dependent functions.
-
-  - *Rationale*: Unnecessary locale dependence can cause bugs that are very tricky to isolate and fix.
-
-  - These functions are known to be locale dependent:
-    `alphasort`, `asctime`, `asprintf`, `atof`, `atoi`, `atol`, `atoll`, `atoq`,
-    `btowc`, `ctime`, `dprintf`, `fgetwc`, `fgetws`, `fprintf`, `fputwc`,
-    `fputws`, `fscanf`, `fwprintf`, `getdate`, `getwc`, `getwchar`, `isalnum`,
-    `isalpha`, `isblank`, `iscntrl`, `isdigit`, `isgraph`, `islower`, `isprint`,
-    `ispunct`, `isspace`, `isupper`, `iswalnum`, `iswalpha`, `iswblank`,
-    `iswcntrl`, `iswctype`, `iswdigit`, `iswgraph`, `iswlower`, `iswprint`,
-    `iswpunct`, `iswspace`, `iswupper`, `iswxdigit`, `isxdigit`, `mblen`,
-    `mbrlen`, `mbrtowc`, `mbsinit`, `mbsnrtowcs`, `mbsrtowcs`, `mbstowcs`,
-    `mbtowc`, `mktime`, `putwc`, `putwchar`, `scanf`, `snprintf`, `sprintf`,
-    `sscanf`, `stoi`, `stol`, `stoll`, `strcasecmp`, `strcasestr`, `strcoll`,
-    `strfmon`, `strftime`, `strncasecmp`, `strptime`, `strtod`, `strtof`,
-    `strtoimax`, `strtol`, `strtold`, `strtoll`, `strtoq`, `strtoul`,
-    `strtoull`, `strtoumax`, `strtouq`, `strxfrm`, `swprintf`, `tolower`,
-    `toupper`, `towctrans`, `towlower`, `towupper`, `ungetwc`, `vasprintf`,
-    `vdprintf`, `versionsort`, `vfprintf`, `vfscanf`, `vfwprintf`, `vprintf`,
-    `vscanf`, `vsnprintf`, `vsprintf`, `vsscanf`, `vswprintf`, `vwprintf`,
-    `wcrtomb`, `wcscasecmp`, `wcscoll`, `wcsftime`, `wcsncasecmp`, `wcsnrtombs`,
-    `wcsrtombs`, `wcstod`, `wcstof`, `wcstoimax`, `wcstol`, `wcstold`,
-    `wcstoll`, `wcstombs`, `wcstoul`, `wcstoull`, `wcstoumax`, `wcswidth`,
-    `wcsxfrm`, `wctob`, `wctomb`, `wctrans`, `wctype`, `wcwidth`, `wprintf`
-
-- For `strprintf`, `LogInfo`, `LogDebug`, etc formatting characters don't need size specifiers.
+- For `strprintf`, `LogInfo`, `LogDebug`, etc formatting characters don't need size specifiers (hh, h, l, ll, j, z, t, L) for arithmetic types.
 
   - *Rationale*: Bitcoin Core uses tinyformat, which is type safe. Leave them out to avoid confusion.
 
@@ -962,10 +964,9 @@ Strings and formatting
   - In cases where you do call `.c_str()`, you might want to additionally check that the string does not contain embedded '\0' characters, because
     it will (necessarily) truncate the string. This might be used to hide parts of the string from logging or to circumvent
     checks. If a use of strings is sensitive to this, take care to check the string for embedded NULL characters first
-    and reject it if there are any (see `ParsePrechecks` in `strencodings.cpp` for an example).
+    and reject it if there are any.
 
-Shadowing
---------------
+## Shadowing
 
 Although the shadowing warning (`-Wshadow`) is not enabled by default (it prevents issues arising
 from using a different variable with the same name),
@@ -974,8 +975,7 @@ please name variables so that their names do not shadow variables defined in the
 When using nested cycles, do not name the inner cycle variable the same as in
 the outer cycle, etc.
 
-Lifetimebound
---------------
+## Lifetimebound
 
 The [Clang `lifetimebound`
 attribute](https://clang.llvm.org/docs/AttributeReference.html#lifetimebound)
@@ -984,8 +984,7 @@ potentially see a compile-time warning if the object has a shorter lifetime from
 the invalid use of a temporary. You can use the attribute by adding a `LIFETIMEBOUND`
 annotation defined in `src/attributes.h`; please grep the codebase for examples.
 
-Threads and synchronization
-----------------------------
+## Threads and synchronization
 
 - Prefer `Mutex` type to `RecursiveMutex` one.
 
@@ -1086,51 +1085,23 @@ TRY_LOCK(cs_vNodes, lockNodes);
 }
 ```
 
-Scripts
---------------------------
+## Scripts
 
-Write scripts in Python rather than bash, when possible.
+Write scripts in Python or Rust rather than bash, when possible.
 
-### Shebang
-
-- Use `#!/usr/bin/env bash` instead of obsolete `#!/bin/bash`.
-
-  - [*Rationale*](https://github.com/dylanaraps/pure-bash-bible#shebang):
-
-    `#!/bin/bash` assumes it is always installed to /bin/ which can cause issues;
-
-    `#!/usr/bin/env bash` searches the user's PATH to find the bash binary.
-
-  OK:
-```bash
-#!/usr/bin/env bash
-```
-
-  Wrong:
-```bash
-#!/bin/bash
-```
-
-Source code organization
---------------------------
+## Source code organization
 
 - Implementation code should go into the `.cpp` file and not the `.h`, unless necessary due to template usage or
   when performance due to inlining is critical.
 
   - *Rationale*: Shorter and simpler header files are easier to read and reduce compile time.
 
-- Use only the lowercase alphanumerics (`a-z0-9`), underscore (`_`) and hyphen (`-`) in source code filenames.
-
-  - *Rationale*: `grep`:ing and auto-completing filenames is easier when using a consistent
-    naming pattern. Potential problems when building on case-insensitive filesystems are
-    avoided when using only lowercase characters in source code filenames.
-
 - Every `.cpp` and `.h` file should `#include` every header file it directly uses classes, functions or other
   definitions from, even if those headers are already included indirectly through other headers.
 
   - *Rationale*: Excluding headers because they are already indirectly included results in compilation
     failures when those indirect dependencies change. Furthermore, it obscures what the real code
-    dependencies are.
+    dependencies are. The [Using IWYU](#using-iwyu) section describes a tool to help enforce this.
 
 - Don't import anything into the global namespace (`using namespace ...`). Use
   fully specified types such as `std::string`.
@@ -1152,26 +1123,7 @@ namespace {
 
   - *Rationale*: Avoids confusion about the namespace context.
 
-- Use `#include <primitives/transaction.h>` bracket syntax instead of
-  `#include "primitives/transactions.h"` quote syntax.
-
-  - *Rationale*: Bracket syntax is less ambiguous because the preprocessor
-    searches a fixed list of include directories without taking location of the
-    source file into account. This allows quoted includes to stand out more when
-    the location of the source file actually is relevant.
-
-- Use include guards to avoid the problem of double inclusion. The header file
-  `foo/bar.h` should use the include guard identifier `BITCOIN_FOO_BAR_H`, e.g.
-
-```c++
-#ifndef BITCOIN_FOO_BAR_H
-#define BITCOIN_FOO_BAR_H
-...
-#endif // BITCOIN_FOO_BAR_H
-```
-
-GUI
------
+## GUI
 
 - Do not display or manipulate dialogs in model code (classes `*Model`).
 
@@ -1192,12 +1144,11 @@ GUI
   - *Rationale*: Blocking the GUI thread can increase latency, and lead to
     hangs and deadlocks.
 
-Subtrees
-----------
+## Subtrees
 
 Several parts of the repository are subtrees of software maintained elsewhere.
 
-Some of these are maintained by active developers of Bitcoin Core, in which case
+Normally, these are maintained by active developers of Bitcoin Core, in which case
 changes should go directly upstream without being PRed directly against the project.
 They will be merged back in the next subtree merge.
 
@@ -1209,31 +1160,34 @@ should be taken upstream.
 There is a tool in `test/lint/git-subtree-check.sh` ([instructions](../test/lint#git-subtree-checksh))
 to check a subtree directory for consistency with its upstream repository.
 
-Current subtrees include:
+The tool instructions also include a list of the subtrees managed by Bitcoin Core.
+
+To fully verify or update a subtree, add it as a remote:
+
+```sh
+git remote add libmultiprocess https://github.com/bitcoin-core/libmultiprocess.git
+```
+
+To update the subtree:
+
+```sh
+git fetch libmultiprocess
+git subtree pull --prefix=src/ipc/libmultiprocess libmultiprocess master --squash
+```
+
+The ultimate upstream of the few externally managed subtrees are:
 
 - src/leveldb
-  - Subtree at https://github.com/bitcoin-core/leveldb-subtree ; maintained by Core contributors.
   - Upstream at https://github.com/google/leveldb ; maintained by Google. Open
-    important PRs to the subtree to avoid delay.
+    important PRs to the Bitcoin Core subtree to avoid delay.
   - **Note**: Follow the instructions in [Upgrading LevelDB](#upgrading-leveldb) when
     merging upstream changes to the LevelDB subtree.
 
 - src/crc32c
   - Used by leveldb for hardware acceleration of CRC32C checksums for data integrity.
-  - Subtree at https://github.com/bitcoin-core/crc32c-subtree ; maintained by Core contributors.
   - Upstream at https://github.com/google/crc32c ; maintained by Google.
 
-- src/secp256k1
-  - Upstream at https://github.com/bitcoin-core/secp256k1/ ; maintained by Core contributors.
-
-- src/crypto/ctaes
-  - Upstream at https://github.com/bitcoin-core/ctaes ; maintained by Core contributors.
-
-- src/minisketch
-  - Upstream at https://github.com/sipa/minisketch ; maintained by Core contributors.
-
-Upgrading LevelDB
----------------------
+## Upgrading LevelDB
 
 Extra care must be taken when upgrading LevelDB. This section explains issues
 you must be aware of.
@@ -1258,7 +1212,7 @@ $ lsof -p $(pidof bitcoind) |\
 mem = 119, fd = 0
 ```
 
-The `mem` value shows how many files are mmap'ed, and the `fd` value shows you
+The `mem` value shows how many files are mmap'ed, and the `fd` value shows how
 many file descriptors these files are using. You should check that `fd` is a
 small number (usually 0 on 64-bit hosts).
 
@@ -1279,8 +1233,7 @@ would be to revert the upstream fix before applying the updates to Bitcoin's
 copy of LevelDB. In general, you should be wary of any upstream changes affecting
 what data is returned from LevelDB queries.
 
-Scripted diffs
---------------
+## Scripted diffs
 
 For reformatting and refactoring commits where the changes can be easily automated using a bash script, we use
 scripted-diff commits. The bash script is included in the commit message and our CI job checks that
@@ -1336,8 +1289,7 @@ To find all previous uses of scripted diffs in the repository, do:
 git log --grep="-BEGIN VERIFY SCRIPT-"
 ```
 
-Release notes
--------------
+## Release notes
 
 Release notes should be written for any PR that:
 
@@ -1350,8 +1302,7 @@ Release notes should be added to a PR-specific release note file at
 `/doc/release-notes-<PR number>.md` to avoid conflicts between multiple PRs.
 All `release-notes*` files are merged into a single `release-notes-<version>.md` file prior to the release.
 
-RPC interface guidelines
---------------------------
+## RPC interface guidelines
 
 A few guidelines for introducing and reviewing new RPC interfaces:
 
@@ -1405,10 +1356,6 @@ A few guidelines for introducing and reviewing new RPC interfaces:
   - *Rationale*: Integer verbosity allows for multiple values. Undocumented boolean verbosity is deprecated
     and new RPC methods should prevent its use.
 
-- Don't forget to fill in the argument names correctly in the RPC command table.
-
-  - *Rationale*: If not, the call cannot be used with name-based arguments.
-
 - Add every non-string RPC argument `(method, idx, name)` to the table `vRPCConvertParams` in `rpc/client.cpp`.
 
   - *Rationale*: `bitcoin-cli` and the GUI debug console use this table to determine how to
@@ -1440,17 +1387,6 @@ A few guidelines for introducing and reviewing new RPC interfaces:
     until the wallet is caught up to the chainstate as of the RPC call's entry.
     This also makes the API much easier for RPC clients to reason about.
 
-- Be aware of RPC method aliases and generally avoid registering the same
-  callback function pointer for different RPCs.
-
-  - *Rationale*: RPC methods registered with the same function pointer will be
-    considered aliases and only the first method name will show up in the
-    `help` RPC command list.
-
-  - *Exception*: Using RPC method aliases may be appropriate in cases where a
-    new RPC is replacing a deprecated RPC, to avoid both RPCs confusingly
-    showing up in the command list.
-
 - Use *invalid* bech32 addresses (e.g. in the constant array `EXAMPLE_ADDRESS`) for
   `RPCExamples` help documentation.
 
@@ -1468,8 +1404,53 @@ A few guidelines for introducing and reviewing new RPC interfaces:
   - *Rationale*: JSON strings are Unicode strings, not byte strings, and
     RFC8259 requires JSON to be encoded as UTF-8.
 
-Internal interface guidelines
------------------------------
+A few guidelines for modifying existing RPC interfaces:
+
+- It's preferable to avoid changing an RPC in a backward-incompatible manner, but in that case, add an associated `-deprecatedrpc=` option to retain previous RPC behavior during the deprecation period. Backward-incompatible changes include: data type changes (e.g. from `{"warnings":""}` to `{"warnings":[]}`, changing a value from a string to a number, etc.), logical meaning changes of a value, key name changes (e.g. `{"warning":""}` to `{"warnings":""}`), or removing a key from an object. Adding a key to an object is generally considered backward-compatible. Include a release note that refers the user to the RPC help for details of feature deprecation and re-enabling previous behavior. [Example RPC help](https://github.com/bitcoin/bitcoin/blob/94f0adcc/src/rpc/blockchain.cpp#L1316-L1323).
+
+  - *Rationale*: Changes in RPC JSON structure can break downstream application compatibility. Implementation of `deprecatedrpc` provides a grace period for downstream applications to migrate. Release notes provide notification to downstream users.
+
+## Feature deprecation and removal process
+
+Bitcoin Core uses a structured process for deprecating and removing features to give
+downstream users and applications time to migrate.
+
+### General principles
+
+- The minimum deprecation **grace period** for a feature that is going to be removed is one
+  major release.
+- Any deprecation or removal must come with a release note.
+
+### RPC methods and fields
+
+- To deprecate an entire RPC method, gate the old behavior behind `-deprecatedrpc=<feature>`.
+  Deprecated features should remain accessible via this flag during the grace period so
+  downstream users are not immediately broken.
+- The RPC help text must mention the deprecation and the `-deprecatedrpc=<feature>` flag
+  that re-enables it. For example:
+  ```
+  "\nDeprecated in v25.0, use the `newfoo` RPC instead. Start bitcoind with"
+  " `-deprecatedrpc=foo` to continue using this RPC.\n"
+  ```
+
+### Startup options
+
+- To deprecate a startup option, emit a warning via `LogWarning` or `InitWarning` when the
+  option is used, so users are notified at startup.
+- Update the option's help text to indicate it is deprecated and, if applicable, will be
+  removed in a future release.
+
+### REST interface
+
+- Deprecated REST endpoints or behaviors should be documented in `doc/REST-interface.md`
+  with the version they were deprecated.
+
+### ZMQ
+
+- Deprecated ZMQ topics or behaviors should be documented in `doc/zmq.md` with the version
+  they were deprecated.
+
+## Internal interface guidelines
 
 Internal interfaces between parts of the codebase that are meant to be
 independent (node, wallet, GUI), are defined in
@@ -1530,9 +1511,9 @@ communication:
   using TipChangedFn = std::function<void(int block_height, int64_t block_time)>;
   virtual std::unique_ptr<interfaces::Handler> handleTipChanged(TipChangedFn fn) = 0;
 
-  // Bad: returns boost connection specific to local process
+  // Bad: returns btcsignals connection specific to local process
   using TipChangedFn = std::function<void(int block_height, int64_t block_time)>;
-  virtual boost::signals2::scoped_connection connectTipChanged(TipChangedFn fn) = 0;
+  virtual btcsignals::scoped_connection connectTipChanged(TipChangedFn fn) = 0;
   ```
 
 - Interface methods should not be overloaded.

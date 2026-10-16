@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2020 The Bitcoin Core developers
+# Copyright (c) 2020-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test GETDATA processing behavior"""
@@ -19,15 +19,14 @@ class P2PStoreBlock(P2PInterface):
         self.blocks = defaultdict(int)
 
     def on_block(self, message):
-        message.block.calc_sha256()
-        self.blocks[message.block.sha256] += 1
+        self.blocks[message.block.hash_int] += 1
 
 
 class GetdataTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
 
-    def run_test(self):
+    def test_invalid_getdata(self):
         p2p_block_store = self.nodes[0].add_p2p_connection(P2PStoreBlock())
 
         self.log.info("test that an invalid GETDATA doesn't prevent processing of future messages")
@@ -43,6 +42,10 @@ class GetdataTest(BitcoinTestFramework):
         good_getdata.inv.append(CInv(t=2, h=best_block))
         p2p_block_store.send_and_ping(good_getdata)
         p2p_block_store.wait_until(lambda: p2p_block_store.blocks[best_block] == 1)
+
+
+    def run_test(self):
+        self.test_invalid_getdata()
 
 
 if __name__ == '__main__':

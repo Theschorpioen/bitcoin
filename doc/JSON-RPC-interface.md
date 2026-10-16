@@ -62,6 +62,8 @@ bitcoin-cli -named createwallet wallet_name=mywallet load_on_startup=true
 bitcoin-cli -named createwallet mywallet load_on_startup=true
 ```
 
+`bitcoin rpc` can also be substituted for `bitcoin-cli -named`, and is a newer alternative.
+
 ## Versioning
 
 The RPC interface might change from one major version of Bitcoin Core to the
@@ -121,6 +123,22 @@ RPC interface will be abused.
   reason, it is important to only use Bitcoin Core for
   security-sensitive operations on a computer whose other programs you
   trust.
+
+- **RPC Credentials Security Boundary:** Any client with valid RPC credentials
+  should be treated as having significant control over both the Bitcoin Core node
+  and the filesystem resources accessible by the `bitcoind` process. RPC commands
+  can load wallet files from paths that the `bitcoind` process has permission to
+  access, specify file paths for operations, and potentially gain broader access
+  than intended. This means that someone with RPC access can potentially compromise
+  not only the Bitcoin Core node, but also the machine it is running on. Bitcoin Core
+  provides the `-rpcwhitelist` option to restrict which RPC commands specific users
+  can access, and `-rpcwhitelistdefault` to control the default behavior for users
+  without explicit whitelists. However, when using multiple wallets or sharing access
+  with different users, these should not be considered robust security boundaries, as
+  users with access to certain commands may still be able to exploit functionality in
+  unexpected ways. For security-sensitive operations, implement proper system-level
+  isolation (containers, virtualization, separate user accounts with restricted
+  permissions) rather than relying solely on RPC access controls.
 
 - **Securing remote network access:** You may optionally allow other
   computers to remotely control Bitcoin Core by setting the `rpcallowip`

@@ -12,11 +12,14 @@
 #include <util/time.h>
 
 #include <array>
+#include <cstring>
 #include <map>
 #include <optional>
+#include <utility>
 
 using util::Join;
 using util::RemovePrefixView;
+using util::RemoveSuffixView;
 
 const char * const DEFAULT_DEBUGLOGFILE = "debug.log";
 constexpr auto MAX_USER_SETABLE_SEVERITY_LEVEL{BCLog::Level::Info};
@@ -28,7 +31,7 @@ BCLog::Logger& LogInstance()
  * cleaned up by the OS/libc. Defining a logger as a global object doesn't work
  * since the order of destruction of static/global objects is undefined.
  * Consider if the logger gets destroyed, and then some later destructor calls
- * LogPrintf, maybe indirectly, and you get a core dump at shutdown trying to
+ * LogInfo, maybe indirectly, and you get a core dump at shutdown trying to
  * access the logger. When the shutdown sequence is fully audited and tested,
  * explicit destruction of these objects can be implemented by changing this
  * from a raw pointer to a std::unique_ptr.
@@ -51,7 +54,7 @@ static int FileWriteStr(std::string_view str, FILE *fp)
 
 bool BCLog::Logger::StartLogging()
 {
-    StdLockGuard scoped_lock(m_cs);
+    STDLOCK(m_cs);
 
     assert(m_buffering);
     assert(m_fileout == nullptr);
@@ -73,12 +76,17 @@ bool BCLog::Logger::StartLogging()
     // dump buffered messages from before we opened the log
     m_buffering = false;
     if (m_buffer_lines_discarded > 0) {
-        LogPrintStr_(strprintf("Early logging buffer overflowed, %d log lines discarded.\n", m_buffer_lines_discarded), __func__, __FILE__, __LINE__, BCLog::ALL, Level::Info);
+        LogPrint_({
+            .category = BCLog::ALL,
+            .level = Level::Info,
+            .should_ratelimit = false,
+            .source_loc = SourceLocation{__func__},
+            .message = strprintf("Early logging buffer overflowed, %d log lines discarded.", m_buffer_lines_discarded),
+        });
     }
     while (!m_msgs_before_open.empty()) {
         const auto& buflog = m_msgs_before_open.front();
-        std::string s{buflog.str};
-        FormatLogStrInPlace(s, buflog.category, buflog.level, buflog.source_file, buflog.source_line, buflog.logging_function, buflog.threadname, buflog.now, buflog.mocktime);
+        std::string s{Format(buflog)};
         m_msgs_before_open.pop_front();
 
         if (m_print_to_file) FileWriteStr(s, m_fileout);
@@ -95,7 +103,7 @@ bool BCLog::Logger::StartLogging()
 
 void BCLog::Logger::DisconnectTestLogger()
 {
-    StdLockGuard scoped_lock(m_cs);
+    STDLOCK(m_cs);
     m_buffering = true;
     if (m_fileout != nullptr) fclose(m_fileout);
     m_fileout = nullptr;
@@ -109,7 +117,7 @@ void BCLog::Logger::DisconnectTestLogger()
 void BCLog::Logger::DisableLogging()
 {
     {
-        StdLockGuard scoped_lock(m_cs);
+        STDLOCK(m_cs);
         assert(m_buffering);
         assert(m_print_callbacks.empty());
     }
@@ -125,10 +133,11 @@ void BCLog::Logger::EnableCategory(BCLog::LogFlags flag)
 
 bool BCLog::Logger::EnableCategory(std::string_view str)
 {
-    BCLog::LogFlags flag;
-    if (!GetLogCategory(flag, str)) return false;
-    EnableCategory(flag);
-    return true;
+    if (const auto flag{GetLogCategory(str)}) {
+        EnableCategory(*flag);
+        return true;
+    }
+    return false;
 }
 
 void BCLog::Logger::DisableCategory(BCLog::LogFlags flag)
@@ -138,10 +147,11 @@ void BCLog::Logger::DisableCategory(BCLog::LogFlags flag)
 
 bool BCLog::Logger::DisableCategory(std::string_view str)
 {
-    BCLog::LogFlags flag;
-    if (!GetLogCategory(flag, str)) return false;
-    DisableCategory(flag);
-    return true;
+    if (const auto flag{GetLogCategory(str)}) {
+        DisableCategory(*flag);
+        return true;
+    }
+    return false;
 }
 
 bool BCLog::Logger::WillLogCategory(BCLog::LogFlags category) const
@@ -157,7 +167,7 @@ bool BCLog::Logger::WillLogCategoryLevel(BCLog::LogFlags category, BCLog::Level 
 
     if (!WillLogCategory(category)) return false;
 
-    StdLockGuard scoped_lock(m_cs);
+    STDLOCK(m_cs);
     const auto it{m_category_log_levels.find(category)};
     return level >= (it == m_category_log_levels.end() ? LogLevel() : it->second);
 }
@@ -185,7 +195,6 @@ static const std::map<std::string, BCLog::LogFlags, std::less<>> LOG_CATEGORIES_
     {"prune", BCLog::PRUNE},
     {"proxy", BCLog::PROXY},
     {"mempoolrej", BCLog::MEMPOOLREJ},
-    {"libevent", BCLog::LIBEVENT},
     {"coindb", BCLog::COINDB},
     {"qt", BCLog::QT},
     {"leveldb", BCLog::LEVELDB},
@@ -199,6 +208,9 @@ static const std::map<std::string, BCLog::LogFlags, std::less<>> LOG_CATEGORIES_
     {"txreconciliation", BCLog::TXRECONCILIATION},
     {"scan", BCLog::SCAN},
     {"txpackages", BCLog::TXPACKAGES},
+    {"kernel", BCLog::KERNEL},
+    {"privatebroadcast", BCLog::PRIVBROADCAST},
+    {"mining", BCLog::MINING},
 };
 
 static const std::unordered_map<BCLog::LogFlags, std::string> LOG_CATEGORIES_BY_FLAG{
@@ -213,18 +225,20 @@ static const std::unordered_map<BCLog::LogFlags, std::string> LOG_CATEGORIES_BY_
     }(LOG_CATEGORIES_BY_STR)
 };
 
-bool GetLogCategory(BCLog::LogFlags& flag, std::string_view str)
+std::optional<BCLog::LogFlags> BCLog::Logger::GetLogCategory(std::string_view str)
 {
     if (str.empty() || str == "1" || str == "all") {
-        flag = BCLog::ALL;
-        return true;
+        return BCLog::ALL;
     }
     auto it = LOG_CATEGORIES_BY_STR.find(str);
     if (it != LOG_CATEGORIES_BY_STR.end()) {
-        flag = it->second;
-        return true;
+        return it->second;
     }
-    return false;
+    if (str == "libevent") {
+       LogWarning("The logging category `%s` is deprecated, does nothing, and will be removed in a future version", str);
+       return BCLog::NONE;
+    }
+    return std::nullopt;
 }
 
 std::string BCLog::Logger::LogLevelToStr(BCLog::Level level)
@@ -318,15 +332,16 @@ namespace BCLog {
     /** Belts and suspenders: make sure outgoing log messages don't contain
      * potentially suspicious characters, such as terminal control codes.
      *
-     * This escapes control characters except newline ('\n') in C syntax.
-     * It escapes instead of removes them to still allow for troubleshooting
-     * issues where they accidentally end up in strings.
+     * This escapes control characters, including newline ('\n'), in C syntax,
+     * so untrusted data can't forge log lines. It escapes instead of removes
+     * them to still allow for troubleshooting issues where they accidentally
+     * end up in strings.
      */
     std::string LogEscapeMessage(std::string_view str) {
         std::string ret;
         for (char ch_in : str) {
             uint8_t ch = (uint8_t)ch_in;
-            if ((ch >= 32 || ch == '\n') && ch != '\x7f') {
+            if (ch >= 32 && ch != '\x7f') {
                 ret += ch_in;
             } else {
                 ret += strprintf("\\x%02x", ch);
@@ -362,53 +377,76 @@ std::string BCLog::Logger::GetLogPrefix(BCLog::LogFlags category, BCLog::Level l
     return s;
 }
 
-static size_t MemUsage(const BCLog::Logger::BufferedLog& buflog)
+static size_t MemUsage(const util::log::Entry& log)
 {
-    return buflog.str.size() + buflog.logging_function.size() + buflog.source_file.size() + buflog.threadname.size() + memusage::MallocUsage(sizeof(memusage::list_node<BCLog::Logger::BufferedLog>));
+    return memusage::DynamicUsage(log.message) +
+           memusage::DynamicUsage(log.thread_name) +
+           memusage::MallocUsage(sizeof(memusage::list_node<util::log::Entry>));
 }
 
-void BCLog::Logger::FormatLogStrInPlace(std::string& str, BCLog::LogFlags category, BCLog::Level level, std::string_view source_file, int source_line, std::string_view logging_function, std::string_view threadname, SystemClock::time_point now, std::chrono::seconds mocktime) const
+BCLog::LogRateLimiter::LogRateLimiter(uint64_t max_bytes, std::chrono::seconds reset_window)
+    : m_max_bytes{max_bytes}, m_reset_window{reset_window} {}
+
+std::shared_ptr<BCLog::LogRateLimiter> BCLog::LogRateLimiter::Create(
+    SchedulerFunction&& scheduler_func, uint64_t max_bytes, std::chrono::seconds reset_window)
 {
-    if (!str.ends_with('\n')) str.push_back('\n');
+    auto limiter{std::shared_ptr<LogRateLimiter>(new LogRateLimiter(max_bytes, reset_window))};
+    std::weak_ptr<LogRateLimiter> weak_limiter{limiter};
+    auto reset = [weak_limiter] {
+        if (auto shared_limiter{weak_limiter.lock()}) shared_limiter->Reset();
+    };
+    scheduler_func(reset, limiter->m_reset_window);
+    return limiter;
+}
 
-    str.insert(0, GetLogPrefix(category, level));
+BCLog::LogRateLimiter::Status BCLog::LogRateLimiter::Consume(
+    const SourceLocation& source_loc,
+    const std::string& str)
+{
+    STDLOCK(m_mutex);
+    auto& stats{m_source_locations.try_emplace(source_loc, m_max_bytes).first->second};
+    Status status{stats.m_dropped_bytes > 0 ? Status::STILL_SUPPRESSED : Status::UNSUPPRESSED};
 
-    if (m_log_sourcelocations) {
-        str.insert(0, strprintf("[%s:%d] [%s] ", RemovePrefixView(source_file, "./"), source_line, logging_function));
+    if (!stats.Consume(str.size()) && status == Status::UNSUPPRESSED) {
+        status = Status::NEWLY_SUPPRESSED;
+        m_suppression_active = true;
     }
+
+    return status;
+}
+
+std::string BCLog::Logger::Format(const util::log::Entry& entry) const
+{
+    std::string result{LogTimestampStr(entry.timestamp, entry.mocktime)};
 
     if (m_log_threadnames) {
-        str.insert(0, strprintf("[%s] ", (threadname.empty() ? "unknown" : threadname)));
+        result += strprintf("[%s] ", (entry.thread_name.empty() ? "unknown" : entry.thread_name));
     }
 
-    str.insert(0, LogTimestampStr(now, mocktime));
+    if (m_log_sourcelocations) {
+        result += strprintf("[%s:%d] [%s] ", RemovePrefixView(entry.source_loc.file_name(), "./"), entry.source_loc.line(), entry.source_loc.function_name_short());
+    }
+
+    result += GetLogPrefix(static_cast<LogFlags>(entry.category), entry.level);
+    // Strip the conventional trailing '\n' that many callers still pass, so only embedded newlines are escaped
+    result += LogEscapeMessage(RemoveSuffixView(entry.message, "\n"));
+    result += '\n';
+    return result;
 }
 
-void BCLog::Logger::LogPrintStr(std::string_view str, std::string_view logging_function, std::string_view source_file, int source_line, BCLog::LogFlags category, BCLog::Level level)
+void BCLog::Logger::LogPrint(util::log::Entry entry)
 {
-    StdLockGuard scoped_lock(m_cs);
-    return LogPrintStr_(str, logging_function, source_file, source_line, category, level);
+    STDLOCK(m_cs);
+    return LogPrint_(std::move(entry));
 }
 
-void BCLog::Logger::LogPrintStr_(std::string_view str, std::string_view logging_function, std::string_view source_file, int source_line, BCLog::LogFlags category, BCLog::Level level)
+// NOLINTNEXTLINE(misc-no-recursion)
+void BCLog::Logger::LogPrint_(util::log::Entry entry)
 {
-    std::string str_prefixed = LogEscapeMessage(str);
-
     if (m_buffering) {
         {
-            BufferedLog buf{
-                .now=SystemClock::now(),
-                .mocktime=GetMockTime(),
-                .str=str_prefixed,
-                .logging_function=std::string(logging_function),
-                .source_file=std::string(source_file),
-                .threadname=util::ThreadGetInternalName(),
-                .source_line=source_line,
-                .category=category,
-                .level=level,
-            };
-            m_cur_buffer_memusage += MemUsage(buf);
-            m_msgs_before_open.push_back(std::move(buf));
+            m_cur_buffer_memusage += MemUsage(entry);
+            m_msgs_before_open.push_back(std::move(entry));
         }
 
         while (m_cur_buffer_memusage > m_max_buffer_memusage) {
@@ -424,7 +462,36 @@ void BCLog::Logger::LogPrintStr_(std::string_view str, std::string_view logging_
         return;
     }
 
-    FormatLogStrInPlace(str_prefixed, category, level, source_file, source_line, logging_function, util::ThreadGetInternalName(), SystemClock::now(), GetMockTime());
+    std::string str_prefixed{Format(entry)};
+    bool ratelimit{false};
+    if (entry.should_ratelimit && m_limiter) {
+        auto status{m_limiter->Consume(entry.source_loc, str_prefixed)};
+        if (status == LogRateLimiter::Status::NEWLY_SUPPRESSED) {
+            // NOLINTNEXTLINE(misc-no-recursion)
+            LogPrint_({
+                .category = LogFlags::ALL,
+                .level = Level::Warning,
+                .should_ratelimit = false, // with should_ratelimit=false, this cannot lead to infinite recursion
+                .source_loc = SourceLocation{__func__},
+                .message = strprintf(
+                    "Excessive logging detected from %s:%d (%s): >%d bytes logged during "
+                    "the last time window of %is. Suppressing logging to disk from this "
+                    "source location until time window resets. Console logging "
+                    "unaffected. Last log entry.",
+                    entry.source_loc.file_name(), entry.source_loc.line(), entry.source_loc.function_name_short(),
+                    m_limiter->m_max_bytes,
+                    Ticks<std::chrono::seconds>(m_limiter->m_reset_window)),
+            });
+        } else if (status == LogRateLimiter::Status::STILL_SUPPRESSED) {
+            ratelimit = true;
+        }
+    }
+
+    // To avoid confusion caused by dropped log messages when debugging an issue,
+    // we prefix log lines with "[*]" when there are any suppressed source locations.
+    if (m_limiter && m_limiter->SuppressionsActive()) {
+        str_prefixed.insert(0, "[*] ");
+    }
 
     if (m_print_to_console) {
         // print to console
@@ -434,7 +501,7 @@ void BCLog::Logger::LogPrintStr_(std::string_view str, std::string_view logging_
     for (const auto& cb : m_print_callbacks) {
         cb(str_prefixed);
     }
-    if (m_print_to_file) {
+    if (m_print_to_file && !ratelimit) {
         assert(m_fileout != nullptr);
 
         // reopen the log file, if requested
@@ -453,6 +520,8 @@ void BCLog::Logger::LogPrintStr_(std::string_view str, std::string_view logging_
 
 void BCLog::Logger::ShrinkDebugFile()
 {
+    STDLOCK(m_cs);
+
     // Amount of debug.log to save at end when shrinking (must fit in memory)
     constexpr size_t RECENT_DEBUG_HISTORY_SIZE = 10 * 1000000;
 
@@ -474,7 +543,14 @@ void BCLog::Logger::ShrinkDebugFile()
         // Restart the file with some of the end
         std::vector<char> vch(RECENT_DEBUG_HISTORY_SIZE, 0);
         if (fseek(file, -((long)vch.size()), SEEK_END)) {
-            LogPrintf("Failed to shrink debug log file: fseek(...) failed\n");
+            // LogWarning, except with m_cs held
+            LogPrint_({
+                .category = BCLog::ALL,
+                .level = Level::Warning,
+                .should_ratelimit = true,
+                .source_loc = SourceLocation{__func__},
+                .message = "Failed to shrink debug log file: fseek(...) failed",
+            });
             fclose(file);
             return;
         }
@@ -492,6 +568,35 @@ void BCLog::Logger::ShrinkDebugFile()
         fclose(file);
 }
 
+void BCLog::LogRateLimiter::Reset()
+{
+    decltype(m_source_locations) source_locations;
+    {
+        STDLOCK(m_mutex);
+        source_locations.swap(m_source_locations);
+        m_suppression_active = false;
+    }
+    for (const auto& [source_loc, stats] : source_locations) {
+        if (stats.m_dropped_bytes == 0) continue;
+        LogWarning(util::log::NO_RATE_LIMIT,
+            "Restarting logging from %s:%d (%s): %d bytes were dropped during the last %ss.",
+            source_loc.file_name(), source_loc.line(), source_loc.function_name_short(),
+            stats.m_dropped_bytes, Ticks<std::chrono::seconds>(m_reset_window));
+    }
+}
+
+bool BCLog::LogRateLimiter::Stats::Consume(uint64_t bytes)
+{
+    if (bytes > m_available_bytes) {
+        m_dropped_bytes += bytes;
+        m_available_bytes = 0;
+        return false;
+    }
+
+    m_available_bytes -= bytes;
+    return true;
+}
+
 bool BCLog::Logger::SetLogLevel(std::string_view level_str)
 {
     const auto level = GetLogLevel(level_str);
@@ -502,13 +607,32 @@ bool BCLog::Logger::SetLogLevel(std::string_view level_str)
 
 bool BCLog::Logger::SetCategoryLogLevel(std::string_view category_str, std::string_view level_str)
 {
-    BCLog::LogFlags flag;
-    if (!GetLogCategory(flag, category_str)) return false;
+    const auto flag{GetLogCategory(category_str)};
+    if (!flag) return false;
 
     const auto level = GetLogLevel(level_str);
     if (!level.has_value() || level.value() > MAX_USER_SETABLE_SEVERITY_LEVEL) return false;
+    if (*flag == BCLog::NONE) return true;
 
-    StdLockGuard scoped_lock(m_cs);
-    m_category_log_levels[flag] = level.value();
+    STDLOCK(m_cs);
+    m_category_log_levels[*flag] = level.value();
     return true;
+}
+
+bool util::log::ShouldDebugLog(Category category)
+{
+    return LogInstance().WillLogCategoryLevel(static_cast<BCLog::LogFlags>(category), util::log::Level::Debug);
+}
+
+bool util::log::ShouldTraceLog(Category category)
+{
+    return LogInstance().WillLogCategoryLevel(static_cast<BCLog::LogFlags>(category), util::log::Level::Trace);
+}
+
+void util::log::Log(util::log::Entry entry)
+{
+    BCLog::Logger& logger{LogInstance()};
+    if (logger.Enabled()) {
+        logger.LogPrint(std::move(entry));
+    }
 }

@@ -1,5 +1,5 @@
 // Copyright (c) 2017, 2021 Pieter Wuille
-// Copyright (c) 2021 The Bitcoin Core developers
+// Copyright (c) 2021-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -14,15 +14,17 @@
 #ifndef BITCOIN_BECH32_H
 #define BITCOIN_BECH32_H
 
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bech32
 {
 
-/** The Bech32 and Bech32m checksum size */
-constexpr size_t CHECKSUM_SIZE = 6;
+inline constexpr size_t CHECKSUM_SIZE = 6;
+inline constexpr char SEPARATOR = '1';
 
 enum class Encoding {
     INVALID, //!< Failed decoding
@@ -37,6 +39,7 @@ enum class Encoding {
  *  and we would never encode an address with such a massive value */
 enum CharLimit : size_t {
     BECH32 = 90,            //!< BIP173/350 imposed character limit for Bech32(m) encoded addresses. This guarantees finding up to 4 errors.
+    SILENT_PAYMENTS = 1023, //!< BIP352 imposed 1023 character limit on Bech32m encoded silent payment addresses. This guarantees finding up to 3 errors.
 };
 
 /** Encode a Bech32 or Bech32m string. If hrp contains uppercase characters, this will cause an

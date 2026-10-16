@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2022 The Bitcoin Core developers
+// Copyright (c) 2011-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -10,11 +10,13 @@
 #include <qt/platformstyle.h>
 #include <qt/walletmodel.h>
 
-#include <common/signmessage.h> // For MessageSign(), MessageVerify()
+#include <common/signmessage.h>
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 #include <key_io.h>
 #include <wallet/wallet.h>
 
+#include <string>
+#include <variant>
 #include <vector>
 
 #include <QClipboard>
@@ -151,8 +153,7 @@ void SignVerifyMessageDialog::on_signMessageButton_SM_clicked()
         case SigningResult::SIGNING_FAILED:
             error = tr("Message signing failed.");
             break;
-        // no default case, so the compiler can warn about missing cases
-    }
+    } // no default case, so the compiler can warn about missing cases
 
     if (res != SigningResult::OK) {
         ui->statusLabel_SM->setStyleSheet("QLabel { color: red; }");

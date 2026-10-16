@@ -12,28 +12,14 @@
 #include <util/bitset.h>
 #include <util/feefrac.h>
 
-#include <stdint.h>
+#include <cstdint>
 #include <numeric>
-#include <vector>
 #include <utility>
+#include <vector>
 
-namespace {
-
-using namespace cluster_linearize;
+namespace cluster_linearize {
 
 using TestBitSet = BitSet<32>;
-
-/** Check if a graph is acyclic. */
-template<typename SetType>
-bool IsAcyclic(const DepGraph<SetType>& depgraph) noexcept
-{
-    for (ClusterIndex i : depgraph.Positions()) {
-        if ((depgraph.Ancestors(i) & depgraph.Descendants(i)) != SetType::Singleton(i)) {
-            return false;
-        }
-    }
-    return true;
-}
 
 /** A formatter for a bespoke serialization for acyclic DepGraph objects.
  *
@@ -111,7 +97,7 @@ bool IsAcyclic(const DepGraph<SetType>& depgraph) noexcept
 struct DepGraphFormatter
 {
     /** Convert x>=0 to 2x (even), x<0 to -2x-1 (odd). */
-    [[maybe_unused]] static uint64_t SignedToUnsigned(int64_t x) noexcept
+    static uint64_t SignedToUnsigned(int64_t x) noexcept
     {
         if (x < 0) {
             return 2 * uint64_t(-(x + 1)) + 1;
@@ -121,7 +107,7 @@ struct DepGraphFormatter
     }
 
     /** Convert even x to x/2 (>=0), odd x to -(x/2)-1 (<0). */
-    [[maybe_unused]] static int64_t UnsignedToSigned(uint64_t x) noexcept
+    static int64_t UnsignedToSigned(uint64_t x) noexcept
     {
         if (x & 1) {
             return -int64_t(x / 2) - 1;
@@ -134,10 +120,10 @@ struct DepGraphFormatter
     static void Ser(Stream& s, const DepGraph<SetType>& depgraph)
     {
         /** Construct a topological order to serialize the transactions in. */
-        std::vector<ClusterIndex> topo_order;
+        std::vector<DepGraphIndex> topo_order;
         topo_order.reserve(depgraph.TxCount());
         for (auto i : depgraph.Positions()) topo_order.push_back(i);
-        std::sort(topo_order.begin(), topo_order.end(), [&](ClusterIndex a, ClusterIndex b) {
+        std::sort(topo_order.begin(), topo_order.end(), [&](DepGraphIndex a, DepGraphIndex b) {
             auto anc_a = depgraph.Ancestors(a).Count(), anc_b = depgraph.Ancestors(b).Count();
             if (anc_a != anc_b) return anc_a < anc_b;
             return a < b;
@@ -148,9 +134,9 @@ struct DepGraphFormatter
         SetType done;
 
         // Loop over the transactions in topological order.
-        for (ClusterIndex topo_idx = 0; topo_idx < topo_order.size(); ++topo_idx) {
+        for (DepGraphIndex topo_idx = 0; topo_idx < topo_order.size(); ++topo_idx) {
             /** Which depgraph index we are currently writing. */
-            ClusterIndex idx = topo_order[topo_idx];
+            DepGraphIndex idx = topo_order[topo_idx];
             // Write size, which must be larger than 0.
             s << VARINT_MODE(depgraph.FeeRate(idx).size, VarIntMode::NONNEGATIVE_SIGNED);
             // Write fee, encoded as an unsigned varint (odd=negative, even=non-negative).
@@ -158,9 +144,9 @@ struct DepGraphFormatter
             // Write dependency information.
             SetType written_parents;
             uint64_t diff = 0; //!< How many potential parent/child relations we have skipped over.
-            for (ClusterIndex dep_dist = 0; dep_dist < topo_idx; ++dep_dist) {
+            for (DepGraphIndex dep_dist = 0; dep_dist < topo_idx; ++dep_dist) {
                 /** Which depgraph index we are currently considering as parent of idx. */
-                ClusterIndex dep_idx = topo_order[topo_idx - 1 - dep_dist];
+                DepGraphIndex dep_idx = topo_order[topo_idx - 1 - dep_dist];
                 // Ignore transactions which are already known to be ancestors.
                 if (depgraph.Descendants(dep_idx).Overlaps(written_parents)) continue;
                 if (depgraph.Ancestors(idx)[dep_idx]) {
@@ -203,9 +189,9 @@ struct DepGraphFormatter
         DepGraph<SetType> topo_depgraph;
         /** Mapping from serialization order to cluster order, used later to reconstruct the
          *  cluster order. */
-        std::vector<ClusterIndex> reordering;
+        std::vector<DepGraphIndex> reordering;
         /** How big the entries vector in the reconstructed depgraph will be (including holes). */
-        ClusterIndex total_size{0};
+        DepGraphIndex total_size{0};
 
         // Read transactions in topological order.
         while (true) {
@@ -229,9 +215,9 @@ struct DepGraphFormatter
                 // Read dependency information.
                 auto topo_idx = reordering.size();
                 s >> VARINT(diff);
-                for (ClusterIndex dep_dist = 0; dep_dist < topo_idx; ++dep_dist) {
+                for (DepGraphIndex dep_dist = 0; dep_dist < topo_idx; ++dep_dist) {
                     /** Which topo_depgraph index we are currently considering as parent of topo_idx. */
-                    ClusterIndex dep_topo_idx = topo_idx - 1 - dep_dist;
+                    DepGraphIndex dep_topo_idx = topo_idx - 1 - dep_dist;
                     // Ignore transactions which are already known ancestors of topo_idx.
                     if (new_ancestors[dep_topo_idx]) continue;
                     if (diff == 0) {
@@ -298,9 +284,9 @@ template<typename SetType>
 void SanityCheck(const DepGraph<SetType>& depgraph)
 {
     // Verify Positions and PositionRange consistency.
-    ClusterIndex num_positions{0};
-    ClusterIndex position_range{0};
-    for (ClusterIndex i : depgraph.Positions()) {
+    DepGraphIndex num_positions{0};
+    DepGraphIndex position_range{0};
+    for (DepGraphIndex i : depgraph.Positions()) {
         ++num_positions;
         position_range = i + 1;
     }
@@ -309,7 +295,7 @@ void SanityCheck(const DepGraph<SetType>& depgraph)
     assert(position_range >= num_positions);
     assert(position_range <= SetType::Size());
     // Consistency check between ancestors internally.
-    for (ClusterIndex i : depgraph.Positions()) {
+    for (DepGraphIndex i : depgraph.Positions()) {
         // Transactions include themselves as ancestors.
         assert(depgraph.Ancestors(i)[i]);
         // If a is an ancestor of b, then b's ancestors must include all of a's ancestors.
@@ -318,8 +304,8 @@ void SanityCheck(const DepGraph<SetType>& depgraph)
         }
     }
     // Consistency check between ancestors and descendants.
-    for (ClusterIndex i : depgraph.Positions()) {
-        for (ClusterIndex j : depgraph.Positions()) {
+    for (DepGraphIndex i : depgraph.Positions()) {
+        for (DepGraphIndex j : depgraph.Positions()) {
             assert(depgraph.Ancestors(i)[j] == depgraph.Descendants(j)[i]);
         }
         // No transaction is a parent or child of itself.
@@ -337,13 +323,13 @@ void SanityCheck(const DepGraph<SetType>& depgraph)
             assert((depgraph.Descendants(child) & children).IsSubsetOf(SetType::Singleton(child)));
         }
     }
-    if (IsAcyclic(depgraph)) {
+    if (depgraph.IsAcyclic()) {
         // If DepGraph is acyclic, serialize + deserialize must roundtrip.
         std::vector<unsigned char> ser;
         VectorWriter writer(ser, 0);
         writer << Using<DepGraphFormatter>(depgraph);
         SpanReader reader(ser);
-        DepGraph<TestBitSet> decoded_depgraph;
+        DepGraph<SetType> decoded_depgraph;
         reader >> Using<DepGraphFormatter>(decoded_depgraph);
         assert(depgraph == decoded_depgraph);
         assert(reader.empty());
@@ -360,7 +346,7 @@ void SanityCheck(const DepGraph<SetType>& depgraph)
         // In acyclic graphs, the union of parents with parents of parents etc. yields the
         // full ancestor set (and similar for children and descendants).
         std::vector<SetType> parents(depgraph.PositionRange()), children(depgraph.PositionRange());
-        for (ClusterIndex i : depgraph.Positions()) {
+        for (DepGraphIndex i : depgraph.Positions()) {
             parents[i] = depgraph.GetReducedParents(i);
             children[i] = depgraph.GetReducedChildren(i);
         }
@@ -392,20 +378,42 @@ void SanityCheck(const DepGraph<SetType>& depgraph)
 
 /** Perform a sanity check on a linearization. */
 template<typename SetType>
-void SanityCheck(const DepGraph<SetType>& depgraph, Span<const ClusterIndex> linearization)
+void SanityCheck(const DepGraph<SetType>& depgraph, std::span<const DepGraphIndex> linearization)
 {
     // Check completeness.
     assert(linearization.size() == depgraph.TxCount());
-    TestBitSet done;
+    SetType done;
     for (auto i : linearization) {
         // Check transaction position is in range.
         assert(depgraph.Positions()[i]);
         // Check topology and lack of duplicates.
-        assert((depgraph.Ancestors(i) - done) == TestBitSet::Singleton(i));
+        assert((depgraph.Ancestors(i) - done) == SetType::Singleton(i));
         done.Set(i);
     }
 }
 
-} // namespace
+inline uint64_t MaxOptimalLinearizationCost(DepGraphIndex cluster_count)
+{
+    // These are the largest numbers seen returned as cost by Linearize(), in a large randomized
+    // trial. There exist almost certainly far worse cases, but they are unlikely to be
+    // encountered in randomized tests. The purpose of these numbers is guaranteeing that for
+    // *some* reasonable cost bound, optimal linearizations are always found.
+    static constexpr uint64_t COSTS[65] = {
+        0,
+        0, 545, 928, 1633, 2647, 4065, 5598, 8258,
+        9505, 11471, 14137, 19553, 20460, 26191, 28397, 32599,
+        41631, 47419, 56329, 57767, 72196, 63652, 95366, 96537,
+        115653, 125407, 131734, 145090, 156349, 164665, 194224, 203953,
+        207710, 225878, 239971, 252284, 256534, 222142, 251332, 357098,
+        325788, 295867, 410053, 497483, 533892, 576572, 577845, 572400,
+        592536, 455082, 609249, 659130, 714091, 544507, 718788, 562378,
+        601926, 1025081, 732725, 708896, 738224, 900445, 1092519, 1139946
+    };
+    assert(cluster_count < std::size(COSTS));
+    // Multiply the table number by two, to account for the fact that they are not absolutes.
+    return COSTS[cluster_count] * 2;
+}
+
+} // namespace cluster_linearize
 
 #endif // BITCOIN_TEST_UTIL_CLUSTER_LINEARIZE_H

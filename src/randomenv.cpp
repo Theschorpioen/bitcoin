@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2022 The Bitcoin Core developers
+// Copyright (c) 2009-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -13,6 +13,7 @@
 #include <crypto/sha512.h>
 #include <span.h>
 #include <support/cleanse.h>
+#include <util/byte_units.h>
 #include <util/time.h>
 
 #include <algorithm>
@@ -38,18 +39,18 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #endif
-#if HAVE_DECL_GETIFADDRS && HAVE_DECL_FREEIFADDRS
+#ifdef HAVE_IFADDRS
 #include <ifaddrs.h>
 #endif
 #ifdef HAVE_SYSCTL
 #include <sys/sysctl.h>
-#ifdef HAVE_VM_VM_PARAM_H
+#if __has_include(<vm/vm_param.h>)
 #include <vm/vm_param.h>
 #endif
-#ifdef HAVE_SYS_RESOURCES_H
+#if __has_include(<sys/resources.h>)
 #include <sys/resources.h>
 #endif
-#ifdef HAVE_SYS_VMMETER_H
+#if __has_include(<sys/vmmeter.h>)
 #include <sys/vmmeter.h>
 #endif
 #endif
@@ -57,8 +58,12 @@
 #include <sys/auxv.h>
 #endif
 
-#ifndef _MSC_VER
-extern char** environ; // NOLINT(readability-redundant-declaration): Necessary on some platforms
+#if defined(__APPLE__) || \
+    defined(__FreeBSD__) || \
+    defined(__NetBSD__) || \
+    defined(__OpenBSD__) || \
+    defined(__illumos__)
+extern char** environ; // Necessary on the above platforms
 #endif
 
 namespace {
@@ -70,10 +75,10 @@ namespace {
  */
 template<typename T>
 CSHA512& operator<<(CSHA512& hasher, const T& data) {
-    static_assert(!std::is_same<typename std::decay<T>::type, char*>::value, "Calling operator<<(CSHA512, char*) is probably not what you want");
-    static_assert(!std::is_same<typename std::decay<T>::type, unsigned char*>::value, "Calling operator<<(CSHA512, unsigned char*) is probably not what you want");
-    static_assert(!std::is_same<typename std::decay<T>::type, const char*>::value, "Calling operator<<(CSHA512, const char*) is probably not what you want");
-    static_assert(!std::is_same<typename std::decay<T>::type, const unsigned char*>::value, "Calling operator<<(CSHA512, const unsigned char*) is probably not what you want");
+    static_assert(!std::is_same_v<std::decay_t<T>, char*>, "Calling operator<<(CSHA512, char*) is probably not what you want");
+    static_assert(!std::is_same_v<std::decay_t<T>, unsigned char*>, "Calling operator<<(CSHA512, unsigned char*) is probably not what you want");
+    static_assert(!std::is_same_v<std::decay_t<T>, const char*>, "Calling operator<<(CSHA512, const char*) is probably not what you want");
+    static_assert(!std::is_same_v<std::decay_t<T>, const unsigned char*>, "Calling operator<<(CSHA512, const unsigned char*) is probably not what you want");
     hasher.Write((const unsigned char*)&data, sizeof(data));
     return hasher;
 }
@@ -109,7 +114,7 @@ void AddFile(CSHA512& hasher, const char *path)
             if (n > 0) hasher.Write(fbuf, n);
             total += n;
             /* not bothering with EINTR handling. */
-        } while (n == sizeof(fbuf) && total < 1048576); // Read only the first 1 Mbyte
+        } while (n == sizeof(fbuf) && total < 1_MiB); // Read only the first 1 Mbyte
         close(f);
     }
 }
@@ -330,7 +335,7 @@ void RandAddStaticEnv(CSHA512& hasher)
     }
 #endif
 
-#if HAVE_DECL_GETIFADDRS && HAVE_DECL_FREEIFADDRS
+#ifdef HAVE_IFADDRS
     // Network interfaces
     struct ifaddrs *ifad = nullptr;
     getifaddrs(&ifad);
@@ -444,7 +449,7 @@ void RandAddStaticEnv(CSHA512& hasher)
      AddSysctl<CTL_KERN, KERN_OSTYPE>(hasher);
 #    endif
 #    ifdef KERN_POSIX1
-     AddSysctl<CTL_KERN, KERN_OSREV>(hasher);
+     AddSysctl<CTL_KERN, KERN_POSIX1>(hasher);
 #    endif
 #    ifdef KERN_VERSION
      AddSysctl<CTL_KERN, KERN_VERSION>(hasher);

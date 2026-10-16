@@ -11,13 +11,14 @@ $(package)_patches += openbsd_kqueue_headers.patch
 $(package)_patches += cmake_minimum.patch
 $(package)_patches += cacheline_undefined.patch
 $(package)_patches += no_librt.patch
+$(package)_patches += add_new_include.patch
 
 define $(package)_set_vars
   $(package)_config_opts := -DCMAKE_BUILD_TYPE=None -DWITH_DOCS=OFF -DWITH_LIBSODIUM=OFF
   $(package)_config_opts += -DWITH_LIBBSD=OFF -DENABLE_CURVE=OFF -DENABLE_CPACK=OFF
   $(package)_config_opts += -DBUILD_SHARED=OFF -DBUILD_TESTS=OFF -DZMQ_BUILD_TESTS=OFF
   $(package)_config_opts += -DENABLE_DRAFTS=OFF -DZMQ_BUILD_TESTS=OFF
-  $(package)_cxxflags += -ffile-prefix-map=$($(package)_extract_dir)=/usr
+  $(package)_cxxflags += -fdebug-prefix-map=$($(package)_extract_dir)=/usr -fmacro-prefix-map=$($(package)_extract_dir)=/usr
   $(package)_config_opts_mingw32 += -DZMQ_WIN32_WINNT=0x0A00 -DZMQ_HAVE_IPC=OFF
 endef
 
@@ -28,7 +29,8 @@ define $(package)_preprocess_cmds
   patch -p1 < $($(package)_patch_dir)/fix_have_windows.patch && \
   patch -p1 < $($(package)_patch_dir)/openbsd_kqueue_headers.patch && \
   patch -p1 < $($(package)_patch_dir)/cmake_minimum.patch && \
-  patch -p1 < $($(package)_patch_dir)/no_librt.patch
+  patch -p1 < $($(package)_patch_dir)/no_librt.patch && \
+  patch -p1 < $($(package)_patch_dir)/add_new_include.patch
 endef
 
 define $(package)_config_cmds

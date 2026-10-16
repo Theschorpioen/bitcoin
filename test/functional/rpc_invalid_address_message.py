@@ -40,12 +40,10 @@ INVALID_ADDRESS = 'asfah14i8fajz0123f'
 INVALID_ADDRESS_2 = '1q049ldschfnwystcqnsvyfpj23mpsg3jcedq9xv'
 
 class InvalidAddressErrorMessageTest(BitcoinTestFramework):
-    def add_options(self, parser):
-        self.add_wallet_options(parser)
-
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
+        self.uses_wallet = None
 
     def check_valid(self, addr):
         info = self.nodes[0].validateaddress(addr)
@@ -70,7 +68,7 @@ class InvalidAddressErrorMessageTest(BitcoinTestFramework):
         self.check_invalid(BECH32_INVALID_BECH32M, 'Version 0 witness address must use Bech32 checksum')
         self.check_invalid(BECH32_INVALID_VERSION, 'Invalid Bech32 address witness version')
         self.check_invalid(BECH32_INVALID_V0_SIZE, "Invalid Bech32 v0 address program size (21 bytes), per BIP141")
-        self.check_invalid(BECH32_TOO_LONG, 'Bech32 string too long', list(range(90, 108)))
+        self.check_invalid(BECH32_TOO_LONG, 'Bech32 string too long', [90])
         self.check_invalid(BECH32_ONE_ERROR, 'Invalid Bech32 checksum', [9])
         self.check_invalid(BECH32_TWO_ERRORS, 'Invalid Bech32 checksum', [22, 43])
         self.check_invalid(BECH32_ONE_ERROR_CAPITALS, 'Invalid Bech32 checksum', [38])
@@ -99,10 +97,12 @@ class InvalidAddressErrorMessageTest(BitcoinTestFramework):
 
         node = self.nodes[0]
 
-        # Missing arg returns the help text
-        assert_raises_rpc_error(-1, "Return information about the given bitcoin address.", node.validateaddress)
-        # Explicit None is not allowed for required parameters
-        assert_raises_rpc_error(-3, "JSON value of type null is not of expected type string", node.validateaddress, None)
+
+        if not self.options.usecli:
+            # Missing arg returns the help text
+            assert_raises_rpc_error(-1, "Return information about the given bitcoin address.", node.validateaddress)
+            # Explicit None is not allowed for required parameters
+            assert_raises_rpc_error(-3, "JSON value of type null is not of expected type string", node.validateaddress, None)
 
     def test_getaddressinfo(self):
         node = self.nodes[0]

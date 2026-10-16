@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2022 The Bitcoin Core developers
+// Copyright (c) 2016-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -8,10 +8,9 @@
 #ifdef WIN32
 #include <windows.h>
 #else
-#include <sys/mman.h> // for mmap
-#include <sys/resource.h> // for getrlimit
-#include <limits.h> // for PAGESIZE
-#include <unistd.h> // for sysconf
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -263,7 +262,8 @@ size_t PosixLockedPageAllocator::GetLimit()
 #ifdef RLIMIT_MEMLOCK
     struct rlimit rlim;
     if (getrlimit(RLIMIT_MEMLOCK, &rlim) == 0) {
-        if (rlim.rlim_cur != RLIM_INFINITY) {
+        if (rlim.rlim_cur != RLIM_INFINITY &&
+            std::cmp_less_equal(rlim.rlim_cur, static_cast<rlim_t>(std::numeric_limits<size_t>::max()))) {
             return rlim.rlim_cur;
         }
     }
@@ -399,4 +399,11 @@ void LockedPoolManager::CreateInstance()
 #endif
     static LockedPoolManager instance(std::move(allocator));
     LockedPoolManager::_instance = &instance;
+}
+
+LockedPoolManager& LockedPoolManager::Instance()
+{
+    static std::once_flag init_flag;
+    std::call_once(init_flag, LockedPoolManager::CreateInstance);
+    return *LockedPoolManager::_instance;
 }

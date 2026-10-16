@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 The Bitcoin Core developers
+// Copyright (c) 2020-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -20,7 +20,7 @@ FUZZ_TARGET(crypto_chacha20)
     const auto key = ConsumeFixedLengthByteVector<std::byte>(fuzzed_data_provider, ChaCha20::KEYLEN);
     ChaCha20 chacha20{key};
 
-    LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
+    LIMITED_WHILE (fuzzed_data_provider.ConsumeBool(), 10000) {
         CallOneOf(
             fuzzed_data_provider,
             [&] {
@@ -108,9 +108,9 @@ void ChaCha20SplitFuzz(FuzzedDataProvider& provider)
         // This tests that Keystream() has the same behavior as Crypt() applied
         // to 0x00 input bytes.
         if (UseCrypt || provider.ConsumeBool()) {
-            crypt2.Crypt(Span{data2}.subspan(bytes2, now), Span{data2}.subspan(bytes2, now));
+            crypt2.Crypt(std::span{data2}.subspan(bytes2, now), std::span{data2}.subspan(bytes2, now));
         } else {
-            crypt2.Keystream(Span{data2}.subspan(bytes2, now));
+            crypt2.Keystream(std::span{data2}.subspan(bytes2, now));
         }
         bytes2 += now;
         if (is_last) break;
@@ -144,8 +144,7 @@ FUZZ_TARGET(crypto_fschacha20)
 
     auto fsc20 = FSChaCha20{key, fuzzed_data_provider.ConsumeIntegralInRange<uint32_t>(1, 1024)};
 
-    LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000)
-    {
+    LIMITED_WHILE (fuzzed_data_provider.ConsumeBool(), 10000) {
         auto input = fuzzed_data_provider.ConsumeBytes<std::byte>(fuzzed_data_provider.ConsumeIntegralInRange(0, 4096));
         std::vector<std::byte> output;
         output.resize(input.size());

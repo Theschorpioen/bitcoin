@@ -4,11 +4,19 @@
 
 include_guard(GLOBAL)
 
-macro(add_windows_resources target rc_file)
-  if(WIN32)
-    target_sources(${target} PRIVATE ${rc_file})
-    set_property(SOURCE ${rc_file}
-      APPEND PROPERTY COMPILE_DEFINITIONS WINDRES_PREPROC
+# Add a fusion manifest to Windows executables.
+# See: https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests
+function(add_windows_application_manifest target)
+  configure_file(${PROJECT_SOURCE_DIR}/cmake/windows-app.manifest.in ${target}.manifest USE_SOURCE_PERMISSIONS)
+  if(MSVC)
+    target_sources(${target} PRIVATE ${target}.manifest)
+  else()
+    # TODO: Remove when upstream issue is fixed:
+    # https://gitlab.kitware.com/cmake/cmake/-/issues/23244
+    file(CONFIGURE
+      OUTPUT ${target}-manifest.rc
+      CONTENT "1 /* CREATEPROCESS_MANIFEST_RESOURCE_ID */ 24 /* RT_MANIFEST */ \"${target}.manifest\""
     )
+    target_sources(${target} PRIVATE ${target}-manifest.rc)
   endif()
-endmacro()
+endfunction()

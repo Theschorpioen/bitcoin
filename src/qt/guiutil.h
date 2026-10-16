@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2022 The Bitcoin Core developers
+// Copyright (c) 2011-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -228,17 +228,17 @@ namespace GUIUtil
     /** Convert enum ConnectionType to QString */
     QString ConnectionTypeToQString(ConnectionType conn_type, bool prepend_direction);
 
-    /** Convert seconds into a QString with days, hours, mins, secs */
-    QString formatDurationStr(std::chrono::seconds dur);
+    /// Convert a duration into a QString with days, hours, mins, secs. This ignores sub-seconds.
+    QString formatDurationStr(std::chrono::nanoseconds dur);
 
     /** Convert peer connection time to a QString denominated in the most relevant unit. */
-    QString FormatPeerAge(std::chrono::seconds time_connected);
+    QString FormatPeerAge(NodeClock::time_point connected);
 
     /** Format CNodeStats.nServices bitmask into a user-readable string */
     QString formatServicesStr(quint64 mask);
 
-    /** Format a CNodeStats.m_last_ping_time into a user-readable string or display N/A, if 0 */
-    QString formatPingTime(std::chrono::microseconds ping_time);
+    /// Format a CNodeStats.m_last_ping_time/m_min_ping_time/m_ping_wait into a user-readable string if it exists, or display N/A
+    QString formatPingTime(NodeClock::duration ping_time);
 
     /** Format a CNodeStateStats.time_offset into a user-readable string */
     QString formatTimeOffset(int64_t time_offset);
@@ -347,28 +347,6 @@ namespace GUIUtil
      * QPixmap* QLabel::pixmap() is deprecated since Qt 5.15.
      */
     bool HasPixmap(const QLabel* label);
-    QImage GetImage(const QLabel* label);
-
-    /**
-     * Splits the string into substrings wherever separator occurs, and returns
-     * the list of those strings. Empty strings do not appear in the result.
-     *
-     * QString::split() signature differs in different Qt versions:
-     *  - QString::SplitBehavior is deprecated since Qt 5.15
-     *  - Qt::SplitBehavior was introduced in Qt 5.14
-     * If {QString|Qt}::SkipEmptyParts behavior is required, use this
-     * function instead of QString::split().
-     */
-    template <typename SeparatorType>
-    QStringList SplitSkipEmptyParts(const QString& string, const SeparatorType& separator)
-    {
-    #if (QT_VERSION >= QT_VERSION_CHECK(5, 14, 0))
-        return string.split(separator, Qt::SkipEmptyParts);
-    #else
-        return string.split(separator, QString::SkipEmptyParts);
-    #endif
-    }
-
 
     /**
      * Replaces a plain text link with an HTML tagged one.
@@ -420,6 +398,38 @@ namespace GUIUtil
                 assert(ok);
             },
             type);
+    }
+    template <typename Sender, typename Signal, typename Slot>
+    auto ExceptionSafeConnect(
+        Sender sender, Signal signal, Slot method)
+    {
+        return QObject::connect(
+            sender, signal,
+            [sender, method](auto&&... args) {
+                bool ok{true};
+                try {
+                    method(std::forward<decltype(args)>(args)...);
+                } catch (const NonFatalCheckError& e) {
+                    PrintSlotException(&e, sender, nullptr);
+                    ok = QMetaObject::invokeMethod(
+                        qApp, "handleNonFatalException",
+                        blockingGUIThreadConnection(),
+                        Q_ARG(QString, QString::fromStdString(e.what())));
+                } catch (const std::exception& e) {
+                    PrintSlotException(&e, sender, nullptr);
+                    ok = QMetaObject::invokeMethod(
+                        qApp, "handleRunawayException",
+                        blockingGUIThreadConnection(),
+                        Q_ARG(QString, QString::fromStdString(e.what())));
+                } catch (...) {
+                    PrintSlotException(nullptr, sender, nullptr);
+                    ok = QMetaObject::invokeMethod(
+                        qApp, "handleRunawayException",
+                        blockingGUIThreadConnection(),
+                        Q_ARG(QString, "Unknown failure occurred."));
+                }
+                assert(ok);
+            });
     }
 
     /**
